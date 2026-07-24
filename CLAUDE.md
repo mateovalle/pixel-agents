@@ -1,23 +1,48 @@
 # Pixel Agents — Compressed Reference
 
-VS Code extension with embedded React webview: pixel art office where AI agents (Claude Code terminals) are animated characters.
+Dual-target app: pixel art office where AI agents (Claude Code terminals) are animated characters. Ships as (1) a standalone **Electron desktop app** (this repo's default `package.json`) and (2) a **VS Code extension** (swap manifests via `npm run use:vscode` / `use:electron`, implemented by `scripts/swap-target.js`; `package-vscode.json` is tracked, `package-electron.json` is generated+gitignored). Both hosts share `src/core/` and the `shared/protocol.ts` message types.
 
 ## Architecture
 
 ```
-src/                          — Extension backend (Node.js, VS Code API)
-  constants.ts                — All backend magic numbers/strings (timing, truncation, asset parsing, VS Code IDs)
-  extension.ts                — Entry: activate(), deactivate()
-  PixelAgentsViewProvider.ts   — WebviewViewProvider, message dispatch, asset loading
-  assetLoader.ts              — PNG parsing, sprite conversion, catalog building, default layout loading
-  agentManager.ts             — Terminal lifecycle: launch, remove, restore, persist
-  layoutPersistence.ts        — User-level layout file I/O (~/.pixel-agents/layout.json), migration, cross-window watching
-  fileWatcher.ts              — fs.watch + polling, readNewLines, /clear detection, terminal adoption
-  transcriptParser.ts         — JSONL parsing: tool_use/tool_result → webview messages
+shared/
+  protocol.ts                 — THE message protocol: HostToWebviewMessage / WebviewToHostMessage
+                                discriminated unions + shared data shapes (SpriteData, FurnitureAsset,
+                                AgentSeatMeta). Types-only; imported by src/, electron/, webview-ui/.
+
+src/core/                     — Host-agnostic backend core (no vscode/electron imports)
+  types.ts                    — CoreAgentState, TrackerContext (agents+watchers+timers+send()), Send
+  constants.ts                — Shared timing/truncation/PNG/layout constants
+  transcriptParser.ts         — JSONL parsing: tool_use/tool_result → send() messages; idle detection
   timerManager.ts             — Waiting/permission timer logic
-  types.ts                    — Shared interfaces (AgentState, PersistedAgent)
+  fileWatcher.ts              — startFileWatching/stopFileWatching/readNewLines (fs.watch + watchFile +
+                                poll, byte-level UTF-8-safe line carry, truncation reset, error handlers)
+  assetLoader.ts              — PNG parsing, sprite conversion, asset/layout loading, sendX(send, ...) helpers
+  layoutPersistence.ts        — Layout file I/O (~/.pixel-agents/layout.json), isValidLayout, cross-window watcher
+
+src/                          — VS Code extension host (imports src/core)
+  constants.ts                — VS Code IDs + re-exports core constants
+  extension.ts                — Entry: activate(), deactivate()
+  PixelAgentsViewProvider.ts  — WebviewViewProvider; owns HostContext (ctx); message dispatch; asset loading
+  agentManager.ts             — Terminal lifecycle: launch, remove, restore (15s grace for async terminal
+                                restore via onDidOpenTerminal), persist
+  fileWatcher.ts              — Project-dir scans (one per workspace folder), /clear reassignment, adoption
+  layoutPersistence.ts        — migrateAndLoadLayout (workspace-state migration) + core re-exports
+  types.ts                    — AgentState (core + terminalRef), HostContext, PersistedAgent
+
+electron/                     — Electron desktop host (imports src/core; tsconfig rootDir=.. →
+                                dist-electron/electron/main.js + dist-electron/src/core/)
+  main.ts                     — Main process: window, node-pty terminals (main constructs ALL commands;
+                                renderer only sends keystrokes), session auto-discovery (24h mtime scan of
+                                ~/.claude/projects), scrollback replay (pty-ready→pty-replay), seat/palette
+                                persistence keyed by SESSION id (~/.pixel-agents/agent-seats.json), settings,
+                                login-shell PATH fix for packaged builds, sandbox+navigation guards
+  preload.ts                  — Minimal contextBridge: postMessage/onMessage + ptyInput/Resize/Kill/Ready
 
 webview-ui/src/               — React + TypeScript (Vite)
+  vscodeApi.ts                — Host abstraction: VS Code webview API or Electron IPC bridge (typed by protocol)
+  components/TerminalPanel.tsx / TerminalInstance.tsx / TerminalTabs.tsx / TerminalSplitter.tsx
+                              — Electron-only xterm.js terminal tabs (hidden-not-unmounted, replay-gated output)
   constants.ts                — All webview magic numbers/strings (grid, animation, rendering, camera, zoom, editor, game logic, notification sound)
   notificationSound.ts        — Web Audio API chime on agent turn completion, with enable/disable
   App.tsx                     — Composition root, hooks + components + EditActionBar
@@ -73,7 +98,7 @@ scripts/                      — 7-stage asset extraction pipeline
 
 **Vocabulary**: Terminal = VS Code terminal running Claude. Session = JSONL conversation file. Agent = webview character bound 1:1 to a terminal.
 
-**Extension ↔ Webview**: `postMessage` protocol. Key messages: `openClaude`, `agentCreated/Closed`, `focusAgent`, `agentToolStart/Done/Clear`, `agentStatus`, `existingAgents`, `layoutLoaded`, `furnitureAssetsLoaded`, `floorTilesLoaded`, `wallTilesLoaded`, `saveLayout`, `saveAgentSeats`, `exportLayout`, `importLayout`, `settingsLoaded`, `setSoundEnabled`.
+**Host ↔ Webview**: `postMessage` protocol, fully typed as discriminated unions in `shared/protocol.ts` (`HostToWebviewMessage` / `WebviewToHostMessage`) — add new message types THERE first; all three targets typecheck against it. Key messages: `openClaude`, `agentCreated/Closed`, `focusAgent`, `agentToolStart/Done/Clear`, `agentStatus`, `existingAgents`, `layoutLoaded`, `furnitureAssetsLoaded`, `floorTilesLoaded`, `wallTilesLoaded`, `saveLayout`, `saveAgentSeats`, `exportLayout`, `importLayout`, `settingsLoaded`, `setSoundEnabled`, plus Electron-only `pty-*` terminal messages.
 
 **One-agent-per-terminal**: Each "+ Agent" click → new terminal (`claude --session-id <uuid>`) → immediate agent creation → 1s poll for `<uuid>.jsonl` → file watching starts.
 
@@ -175,7 +200,15 @@ Toggle via "Layout" button. Tools: SELECT (default), Floor paint, Wall paint, Er
 ```sh
 npm install && cd webview-ui && npm install && cd .. && npm run build
 ```
-Build: type-check → lint → esbuild (extension) → vite (webview). F5 for Extension Dev Host.
+
+Electron (default manifest):
+- `npm run dev` — Vite dev server + Electron (wait-on gated); `npm start` — build + run built app
+- `npm run build` — check (types+lint) → tsc electron → vite webview; `npm run package` — electron-builder (dmg/AppImage/nsis)
+- `npm run check-types` covers src/, electron/, webview-ui/; `npm run lint` covers src/ + electron/ (webview has its own flat config)
+- `postinstall: electron-rebuild` rebuilds node-pty for Electron's ABI (`overrides.node-abi` pinned for new Electron majors)
+- Husky pre-commit runs lint-staged (eslint --fix + prettier); CI: .github/workflows/ci.yml
+
+VS Code extension: `npm run use:vscode && npm install`, then F5 for Extension Dev Host (esbuild bundle). Swap back with `npm run use:electron`.
 
 ## TypeScript Constraints
 
@@ -187,7 +220,9 @@ Build: type-check → lint → esbuild (extension) → vite (webview). F5 for Ex
 
 All magic numbers and strings are centralized — never add inline constants to source files:
 
-- **Extension backend**: `src/constants.ts` — timing intervals, display truncation limits, PNG/asset parsing values, VS Code command/key identifiers
+- **Backend (shared)**: `src/core/constants.ts` — timing intervals, display truncation limits, PNG/asset parsing values, layout file names
+- **VS Code host**: `src/constants.ts` — VS Code command/key identifiers, restore grace (re-exports core constants)
+- **Electron host**: top of `electron/main.ts` — session scan/stale windows, PTY scrollback cap, window geometry
 - **Webview**: `webview-ui/src/constants.ts` — grid/layout sizes, character animation speeds, matrix effect params, rendering offsets/colors, camera, zoom, editor defaults, game logic thresholds
 - **CSS styling**: `webview-ui/src/index.css` `:root` block — `--pixel-*` custom properties for UI colors, backgrounds, borders, z-indices used in React inline styles
 - **Canvas overlay colors** (rgba strings for seats, grids, ghosts, buttons) live in the webview constants file since they're used in canvas 2D context, not CSS

@@ -6,11 +6,11 @@
 			"ES2022"
 		],
 		"sourceMap": true,
-		"rootDir": "src",
 		"strict": true
 	},
 	"include": [
-		"src"
+		"src",
+		"shared"
 	],
 	"exclude": [
 		"node_modules",

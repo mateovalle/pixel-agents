@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
+import type { HostToWebviewMessage } from '../../../shared/protocol.js';
 import { playDoneSound, setSoundEnabled } from '../notificationSound.js';
 import type { OfficeState } from '../office/engine/officeState.js';
 import { setFloorSprites } from '../office/floorTiles.js';
@@ -104,7 +105,7 @@ export function useExtensionMessages(
     }> = [];
 
     const handler = (e: MessageEvent) => {
-      const msg = e.data;
+      const msg = e.data as HostToWebviewMessage;
       const os = getOfficeState();
 
       if (msg.type === 'layoutLoaded') {

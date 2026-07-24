@@ -5,6 +5,7 @@ import * as pty from 'node-pty';
 import * as os from 'os';
 import * as path from 'path';
 
+import type { AgentSeatMeta, WebviewToHostMessage } from '../shared/protocol.js';
 import {
   loadCharacterSprites,
   loadDefaultLayout,
@@ -58,12 +59,6 @@ interface PtyRecord {
   label: string;
   scrollback: string;
   sessionId?: string;
-}
-
-interface AgentSeatMeta {
-  palette?: number;
-  seatId?: string;
-  hueShift?: number;
 }
 
 // ── State ────────────────────────────────────────────────────
@@ -168,12 +163,15 @@ function extractCwdFromJsonl(jsonlFile: string): string | undefined {
   return undefined;
 }
 
+// The core asset loaders append 'assets/' themselves, so this returns the
+// PARENT of the assets directory (resources/ in packaged builds, which
+// electron-builder populates via extraResources → assets).
 function getAssetsRoot(): string {
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'assets');
+    return process.resourcesPath;
   }
   // __dirname is dist-electron/electron in dev builds
-  return path.join(__dirname, '..', '..', 'webview-ui', 'public', 'assets');
+  return path.join(__dirname, '..', '..', 'webview-ui', 'public');
 }
 
 /**
@@ -409,16 +407,16 @@ function setupIpcHandlers(): void {
 
   ipcMain.on('webview-message', (event, msg) => {
     if (!isTrustedSender(event)) return;
-    handleWebviewMessage(msg as Record<string, unknown>);
+    handleWebviewMessage(msg as WebviewToHostMessage);
   });
 }
 
-function handleWebviewMessage(msg: Record<string, unknown>): void {
+function handleWebviewMessage(msg: WebviewToHostMessage): void {
   if (msg.type === 'webviewReady') {
     onWebviewReady();
   } else if (msg.type === 'openClaude') {
     const sessionId = crypto.randomUUID();
-    const cwd = (msg.folderPath as string) || os.homedir();
+    const cwd = msg.folderPath || os.homedir();
     const label = `Agent ${nextTerminalIndex++}`;
     const ptyId = spawnPty({
       cwd,
@@ -433,11 +431,11 @@ function handleWebviewMessage(msg: Record<string, unknown>): void {
       writeLayoutToFile(msg.layout);
     }
   } else if (msg.type === 'saveAgentSeats') {
-    saveAgentSeats(msg.seats as Record<string, AgentSeatMeta> | undefined);
+    saveAgentSeats(msg.seats);
   } else if (msg.type === 'setSoundEnabled') {
     saveJsonFile(SETTINGS_FILE, { soundEnabled: !!msg.enabled });
   } else if (msg.type === 'closeAgent') {
-    const id = msg.id as number;
+    const id = msg.id;
     const agent = ctx.agents.get(id);
     // Remember this session so it doesn't reappear on restart
     if (agent) {
@@ -453,7 +451,7 @@ function handleWebviewMessage(msg: Record<string, unknown>): void {
     removeAgent(id);
     ctx.send({ type: 'agentClosed', id });
   } else if (msg.type === 'focusAgent') {
-    focusAgent(msg.id as number);
+    focusAgent(msg.id);
   } else if (msg.type === 'openSessionsFolder') {
     if (fs.existsSync(CLAUDE_PROJECTS_DIR)) {
       shell.openPath(CLAUDE_PROJECTS_DIR);

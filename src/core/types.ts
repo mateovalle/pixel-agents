@@ -6,8 +6,10 @@
 
 import type * as fs from 'fs';
 
+import type { HostToWebviewMessage } from '../../shared/protocol.js';
+
 /** Posts a message to the current UI (webview / renderer). */
-export type Send = (message: Record<string, unknown>) => void;
+export type Send = (message: HostToWebviewMessage) => void;
 
 export interface CoreAgentState {
   id: number;

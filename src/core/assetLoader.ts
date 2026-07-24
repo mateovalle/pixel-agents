@@ -9,6 +9,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { PNG } from 'pngjs';
 
+import type { CharacterDirectionSprites, FurnitureAsset } from '../../shared/protocol.js';
 import {
   CHAR_COUNT,
   CHAR_FRAME_H,
@@ -25,25 +26,7 @@ import {
 } from './constants.js';
 import type { Send } from './types.js';
 
-export interface FurnitureAsset {
-  id: string;
-  name: string;
-  label: string;
-  category: string;
-  file: string;
-  width: number;
-  height: number;
-  footprintW: number;
-  footprintH: number;
-  isDesk: boolean;
-  canPlaceOnWalls: boolean;
-  partOfGroup?: boolean;
-  groupId?: string;
-  canPlaceOnSurfaces?: boolean;
-  backgroundTiles?: number;
-  orientation?: string;
-  state?: string;
-}
+export type { CharacterDirectionSprites, FurnitureAsset } from '../../shared/protocol.js';
 
 export interface LoadedAssets {
   catalog: FurnitureAsset[];
@@ -319,12 +302,6 @@ export function sendFloorTiles(send: Send, floorTiles: LoadedFloorTiles): void {
 }
 
 // ── Character sprite loading ────────────────────────────────
-
-export interface CharacterDirectionSprites {
-  down: string[][][];
-  up: string[][][];
-  right: string[][][];
-}
 
 export interface LoadedCharacterSprites {
   /** 6 pre-colored characters, each with 9 frames per direction */

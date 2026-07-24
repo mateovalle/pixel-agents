@@ -3,6 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 
+import type { WebviewToHostMessage } from '../shared/protocol.js';
 import {
   getProjectDirPath,
   launchNewTerminal,
@@ -114,7 +115,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.html = getWebviewContent(webviewView.webview, this.extensionUri);
 
     const messageListener = webviewView.webview.onDidReceiveMessage(async (message) => {
-      await this.handleMessage(message);
+      await this.handleMessage(message as WebviewToHostMessage);
     });
     webviewView.onDidDispose(() => {
       messageListener.dispose();
@@ -124,16 +125,16 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private async handleMessage(message: Record<string, unknown>): Promise<void> {
+  private async handleMessage(message: WebviewToHostMessage): Promise<void> {
     if (message.type === 'openClaude') {
-      await launchNewTerminal(this.ctx, message.folderPath as string | undefined);
+      await launchNewTerminal(this.ctx, message.folderPath);
     } else if (message.type === 'focusAgent') {
-      const agent = this.ctx.agents.get(message.id as number);
+      const agent = this.ctx.agents.get(message.id);
       if (agent) {
         agent.terminalRef.show();
       }
     } else if (message.type === 'closeAgent') {
-      const agent = this.ctx.agents.get(message.id as number);
+      const agent = this.ctx.agents.get(message.id);
       if (agent) {
         agent.terminalRef.dispose();
       }
@@ -142,8 +143,10 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
       console.log(`[Pixel Agents] saveAgentSeats:`, JSON.stringify(message.seats));
       this.context.workspaceState.update(WORKSPACE_KEY_AGENT_SEATS, message.seats);
     } else if (message.type === 'saveLayout') {
-      this.layoutWatcher?.markOwnWrite();
-      writeLayoutToFile(message.layout as Record<string, unknown>);
+      if (isValidLayout(message.layout)) {
+        this.layoutWatcher?.markOwnWrite();
+        writeLayoutToFile(message.layout);
+      }
     } else if (message.type === 'setSoundEnabled') {
       this.context.globalState.update(GLOBAL_KEY_SOUND_ENABLED, message.enabled);
     } else if (message.type === 'webviewReady') {

@@ -1,9 +1,11 @@
+import type { WebviewToHostMessage } from '../../shared/protocol.js';
+
 interface VsCodeApi {
-  postMessage(msg: unknown): void;
+  postMessage(msg: WebviewToHostMessage): void;
 }
 
 export interface ElectronAPI {
-  postMessage(msg: unknown): void;
+  postMessage(msg: WebviewToHostMessage): void;
   onMessage(callback: (data: unknown) => void): () => void;
   ptyInput?(id: string, data: string): void;
   ptyResize?(id: string, cols: number, rows: number): void;
@@ -30,7 +32,7 @@ function getApi(): VsCodeApi {
     }
 
     return {
-      postMessage: (msg: unknown) => electronAPI.postMessage(msg),
+      postMessage: (msg: WebviewToHostMessage) => electronAPI.postMessage(msg),
     };
   }
 
