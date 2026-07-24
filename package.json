@@ -2,19 +2,32 @@
   "name": "pixel-agents-desktop",
   "version": "1.0.0",
   "description": "Pixel Agents — standalone desktop app for visualizing AI coding agents",
-  "main": "dist-electron/main.js",
+  "main": "dist-electron/electron/main.js",
   "private": true,
   "scripts": {
     "dev": "concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
     "dev:vite": "cd webview-ui && npx vite --port 5173",
-    "dev:electron": "npm run build:electron && VITE_DEV_SERVER_URL=http://localhost:5173 npx electron dist-electron/main.js",
+    "dev:electron": "npm run build:electron && wait-on tcp:5173 && VITE_DEV_SERVER_URL=http://localhost:5173 npx electron dist-electron/electron/main.js",
     "build:electron": "cd electron && npx tsc",
     "build:webview": "cd webview-ui && npm run build",
-    "build": "npm run build:electron && npm run build:webview",
-    "start": "npm run build && npx electron dist-electron/main.js",
+    "build": "npm run check && npm run build:electron && npm run build:webview",
+    "start": "npm run build && npx electron dist-electron/electron/main.js",
+    "check": "npm run check-types && npm run lint",
+    "check-types": "npm run check-types:src && npm run check-types:electron && npm run check-types:webview",
+    "check-types:src": "tsc --noEmit",
+    "check-types:electron": "tsc --noEmit -p electron",
+    "check-types:webview": "cd webview-ui && npx tsc -b",
+    "lint": "eslint src electron",
+    "lint:fix": "eslint src electron --fix",
+    "lint:webview": "cd webview-ui && npm run lint",
+    "format": "prettier --write \"src/**/*.ts\" \"electron/**/*.ts\" \"webview-ui/src/**/*.{ts,tsx,css}\" \"*.{js,mjs}\" \"webview-ui/*.{js,ts}\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"electron/**/*.ts\" \"webview-ui/src/**/*.{ts,tsx,css}\" \"*.{js,mjs}\" \"webview-ui/*.{js,ts}\"",
+    "prepare": "husky",
     "postinstall": "electron-rebuild",
     "rebuild": "electron-rebuild",
-    "package": "npm run build && npx electron-builder"
+    "package": "npm run build && npx electron-builder",
+    "use:vscode": "node scripts/swap-target.js vscode",
+    "use:electron": "node scripts/swap-target.js electron"
   },
   "build": {
     "appId": "com.pixelagents.desktop",
@@ -44,14 +57,34 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.1",
+    "@types/node": "22.x",
     "@types/pngjs": "^6.0.5",
+    "@types/vscode": "^1.107.0",
     "concurrently": "^9.1.2",
-    "electron": "^35.1.2",
+    "electron": "^43.2.0",
     "electron-builder": "^26.0.12",
-    "typescript": "~5.9.3"
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-simple-import-sort": "^12.1.1",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.3.2",
+    "prettier": "^3.8.1",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.54.0",
+    "wait-on": "^9.1.0"
   },
   "dependencies": {
-    "node-pty": "^1.0.0",
+    "node-pty": "^1.1.0",
     "pngjs": "^7.0.0"
+  },
+  "overrides": {
+    "node-abi": "^4.33.0"
+  },
+  "lint-staged": {
+    "src/**/*.ts": "eslint --fix",
+    "electron/**/*.ts": "eslint --fix",
+    "webview-ui/src/**/*.{ts,tsx}": "eslint --fix",
+    "*.{ts,tsx,js,mjs,css,json,md}": "prettier --write",
+    "webview-ui/**/*.{ts,tsx,js,css,json}": "prettier --write"
   }
 }

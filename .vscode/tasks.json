@@ -4,57 +4,47 @@
 	"version": "2.0.0",
 	"tasks": [
 		{
-            "label": "watch",
-            "dependsOn": [
-                "npm: watch:tsc",
-                "npm: watch:esbuild"
-            ],
-            "presentation": {
-                "reveal": "never"
-            },
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            }
-        },
-        {
-            "type": "npm",
-            "script": "watch:esbuild",
-            "group": "build",
-            "problemMatcher": {
-                "owner": "esbuild",
-                "fileLocation": "absolute",
-                "pattern": {
-                    "regexp": "✘ \\[ERROR\\] (.+?)\\n\\s+(.+?):(\\d+):(\\d+):",
-                    "message": 1,
-                    "file": 2,
-                    "line": 3,
-                    "column": 4
-                },
-                "background": {
-                    "activeOnStart": true,
-                    "beginsPattern": "\\[watch\\] build started",
-                    "endsPattern": "\\[watch\\] build finished"
-                }
-            },
-            "isBackground": true,
-            "label": "npm: watch:esbuild",
-            "presentation": {
-                "group": "watch",
-                "reveal": "never"
-            }
-        },
+			"label": "build:electron",
+			"type": "npm",
+			"script": "build:electron",
+			"problemMatcher": "$tsc",
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"presentation": {
+				"reveal": "silent"
+			}
+		},
 		{
-            "type": "npm",
-            "script": "watch:tsc",
-            "group": "build",
-            "problemMatcher": "$tsc-watch",
-            "isBackground": true,
-            "label": "npm: watch:tsc",
-            "presentation": {
-                "group": "watch",
-                "reveal": "never"
-            }
-        }
+			"label": "dev:vite",
+			"type": "npm",
+			"script": "dev:vite",
+			"isBackground": true,
+			"problemMatcher": {
+				"owner": "vite",
+				"pattern": {
+					"regexp": "^$"
+				},
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": ".*",
+					"endsPattern": "Local:.*http://localhost"
+				}
+			},
+			"presentation": {
+				"group": "dev",
+				"reveal": "never"
+			}
+		},
+		{
+			"label": "check",
+			"type": "npm",
+			"script": "check",
+			"problemMatcher": ["$tsc", "$eslint-stylish"],
+			"presentation": {
+				"reveal": "silent"
+			}
+		}
 	]
 }

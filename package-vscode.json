@@ -63,7 +63,9 @@
     "lint:fix": "eslint src --fix",
     "lint:webview": "cd webview-ui && npm run lint",
     "lint:webview:fix": "cd webview-ui && eslint . --fix",
-    "import-tileset": "tsx scripts/import-tileset-cli.ts",
+    "import-tileset": "tsx scripts/0-import-tileset.ts",
+    "use:vscode": "node scripts/swap-target.js vscode",
+    "use:electron": "node scripts/swap-target.js electron",
     "format": "prettier --write \"src/**/*.ts\" \"webview-ui/src/**/*.{ts,tsx,css}\" \"*.{js,mjs}\" \"webview-ui/*.{js,ts}\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"webview-ui/src/**/*.{ts,tsx,css}\" \"*.{js,mjs}\" \"webview-ui/*.{js,ts}\""
   },
