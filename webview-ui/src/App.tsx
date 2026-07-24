@@ -40,6 +40,11 @@ function getOfficeState(): OfficeState {
   return campus.getActiveOffice();
 }
 
+/** Workspace path of the active office (null → detached fallback, saves globally). */
+function getActiveWorkspacePath(): string | null {
+  return campus.getActiveOfficePath();
+}
+
 const actionBarBtnStyle: React.CSSProperties = {
   padding: '4px 10px',
   fontSize: '22px',
@@ -133,7 +138,7 @@ function EditActionBar({
 }
 
 function App() {
-  const editor = useEditorActions(getOfficeState, editorState);
+  const editor = useEditorActions(getOfficeState, editorState, getActiveWorkspacePath);
 
   const isEditDirty = useCallback(
     () => editor.isEditMode && editor.isDirty,
@@ -188,7 +193,8 @@ function App() {
 
   // Edit-mode transitions: reset the camera (campus pan is meaningless for a
   // single office at origin 0 and vice versa), clear selections on enter, and
-  // propagate the possibly-edited layout to every office on exit.
+  // on exit adopt the possibly-edited layout as the active workspace's own
+  // layout (or as the default layout when editing the detached fallback).
   const prevEditModeRef = useRef(editor.isEditMode);
   useEffect(() => {
     if (prevEditModeRef.current === editor.isEditMode) return;

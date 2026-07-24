@@ -126,7 +126,7 @@ function loadJsonFile<T>(file: string): T | null {
 
 function saveJsonFile(file: string, value: unknown): void {
   try {
-    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify(value, null, 2), 'utf-8');
   } catch (err) {
     console.error(`[Pixel Agents] Failed to write ${path.basename(file)}:`, err);
@@ -143,6 +143,11 @@ function loadSeatMetaBySession(): Record<string, AgentSeatMeta> {
 
 function loadSettings(): { soundEnabled: boolean } {
   return { soundEnabled: true, ...loadJsonFile<{ soundEnabled?: boolean }>(SETTINGS_FILE) };
+}
+
+/** Per-workspace office layout file (~/.pixel-agents/layouts/<sanitized>.json). */
+function getWorkspaceLayoutFile(workspacePath: string): string {
+  return path.join(DATA_DIR, 'layouts', `${workspacePath.replace(/[^a-zA-Z0-9-]/g, '-')}.json`);
 }
 
 /** Same transcript-directory mapping Claude Code uses: cwd → ~/.claude/projects/<sanitized>. */
@@ -698,8 +703,12 @@ function handleWebviewMessage(msg: WebviewToHostMessage): void {
     launchChatAgent(msg.folderPath, msg.sessionId);
   } else if (msg.type === 'saveLayout') {
     if (isValidLayout(msg.layout)) {
-      layoutWatcher?.markOwnWrite();
-      writeLayoutToFile(msg.layout);
+      if (msg.workspacePath) {
+        saveJsonFile(getWorkspaceLayoutFile(msg.workspacePath), msg.layout);
+      } else {
+        layoutWatcher?.markOwnWrite();
+        writeLayoutToFile(msg.layout);
+      }
     }
   } else if (msg.type === 'saveAgentSeats') {
     saveAgentSeats(msg.seats);
@@ -788,6 +797,14 @@ function onWebviewReady(): void {
       if (layout) writeLayoutToFile(layout);
     }
     ctx.send({ type: 'layoutLoaded', layout });
+
+    // Per-workspace layout overrides (offices with their own saved design)
+    for (const ws of loadWorkspaces()) {
+      const wsLayout = loadJsonFile<Record<string, unknown>>(getWorkspaceLayoutFile(ws.path));
+      if (wsLayout && isValidLayout(wsLayout)) {
+        ctx.send({ type: 'layoutLoaded', layout: wsLayout, workspacePath: ws.path });
+      }
+    }
   })();
 
   // Send settings

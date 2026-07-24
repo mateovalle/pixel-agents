@@ -154,7 +154,8 @@ export type HostToWebviewMessage =
   | { type: 'subagentToolPermission'; id: number; parentToolId: string }
   | { type: 'subagentClear'; id: number; parentToolId: string }
   // Assets & layout
-  | { type: 'layoutLoaded'; layout: LayoutData | null }
+  // workspacePath absent = the global default layout; present = that office's own layout
+  | { type: 'layoutLoaded'; layout: LayoutData | null; workspacePath?: string }
   | { type: 'characterSpritesLoaded'; characters: CharacterDirectionSprites[] }
   | { type: 'floorTilesLoaded'; sprites: SpriteData[] }
   | { type: 'wallTilesLoaded'; sprites: SpriteData[] }
@@ -228,7 +229,8 @@ export type WebviewToHostMessage =
   | { type: 'saveAgentSeats'; seats: Record<number, AgentSeatMeta> }
   // Sent as the webview's own OfficeLayout shape; hosts validate structurally
   // with isValidLayout() before persisting.
-  | { type: 'saveLayout'; layout: unknown }
+  // workspacePath present = save as that office's own layout (Electron campus)
+  | { type: 'saveLayout'; layout: unknown; workspacePath?: string }
   | { type: 'setSoundEnabled'; enabled: boolean }
   | { type: 'openSessionsFolder' }
   | { type: 'exportLayout' }

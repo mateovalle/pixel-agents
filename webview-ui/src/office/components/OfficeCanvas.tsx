@@ -203,11 +203,12 @@ export function OfficeCanvas({
           offsetRef.current = { x: baseX, y: baseY };
 
           if (campus.entries.length > 0) {
-            const layout = campus.getLayout();
-            const officeW = layout.cols * TILE_SIZE * zoom;
-            const officeH = layout.rows * TILE_SIZE * zoom;
             const pad = CAMPUS_CULL_PAD_PX * zoom;
             for (const entry of campus.entries) {
+              // Offices may have per-workspace layouts with differing sizes
+              const layout = entry.office.getLayout();
+              const officeW = layout.cols * TILE_SIZE * zoom;
+              const officeH = layout.rows * TILE_SIZE * zoom;
               const ox = baseX + entry.originCol * TILE_SIZE * zoom;
               const oy = baseY + entry.originRow * TILE_SIZE * zoom;
               // Cull offices fully outside the viewport

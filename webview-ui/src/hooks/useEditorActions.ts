@@ -65,6 +65,7 @@ export interface EditorActions {
 export function useEditorActions(
   getOfficeState: () => OfficeState,
   editorState: EditorState,
+  getActiveWorkspacePath?: () => string | null,
 ): EditorActions {
   const [isEditMode, setIsEditMode] = useState(false);
   const [editorTick, setEditorTick] = useState(0);
@@ -79,13 +80,29 @@ export function useEditorActions(
     lastSavedLayoutRef.current = structuredClone(layout);
   }, []);
 
-  // Debounced layout save
-  const saveLayout = useCallback((layout: OfficeLayout) => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
+  // Post a saveLayout message routed to the edited office: a workspace office
+  // saves as that workspace's own layout, the detached fallback office (no
+  // workspace, null path) saves as the global default layout.
+  const postSaveLayout = useCallback((layout: OfficeLayout, workspacePath: string | null) => {
+    if (workspacePath !== null) {
+      vscode.postMessage({ type: 'saveLayout', layout, workspacePath });
+    } else {
       vscode.postMessage({ type: 'saveLayout', layout });
-    }, LAYOUT_SAVE_DEBOUNCE_MS);
+    }
   }, []);
+
+  // Debounced layout save — the destination office is resolved at schedule
+  // time so a pending save can't be re-routed by a later active-office change
+  const saveLayout = useCallback(
+    (layout: OfficeLayout) => {
+      const workspacePath = getActiveWorkspacePath?.() ?? null;
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(() => {
+        postSaveLayout(layout, workspacePath);
+      }, LAYOUT_SAVE_DEBOUNCE_MS);
+    },
+    [postSaveLayout, getActiveWorkspacePath],
+  );
 
   // Track whether we've already pushed undo for the current wall color editing session
   const wallColorEditActiveRef = useRef(false);
@@ -123,9 +140,12 @@ export function useEditorActions(
       const next = !prev;
       editorState.isEditMode = next;
       if (next) {
-        // Initialize wallColor from existing wall tiles so new walls match
         const os = getOfficeState();
         const layout = os.getLayout();
+        // Checkpoint the edited office's current (persisted) layout so Reset
+        // restores this office — offices may have per-workspace layouts
+        lastSavedLayoutRef.current = structuredClone(layout);
+        // Initialize wallColor from existing wall tiles so new walls match
         if (layout.tileColors) {
           for (let i = 0; i < layout.tiles.length; i++) {
             if (layout.tiles[i] === TileType.WALL && layout.tileColors[i]) {
@@ -359,10 +379,10 @@ export function useEditorActions(
     const os = getOfficeState();
     const layout = os.getLayout();
     lastSavedLayoutRef.current = structuredClone(layout);
-    vscode.postMessage({ type: 'saveLayout', layout });
+    postSaveLayout(layout, getActiveWorkspacePath?.() ?? null);
     editorState.isDirty = false;
     setIsDirty(false);
-  }, [getOfficeState, editorState]);
+  }, [getOfficeState, editorState, postSaveLayout, getActiveWorkspacePath]);
 
   // Notify React that imperative editor selection changed (e.g., from OfficeCanvas mouseUp)
   const handleEditorSelectionChange = useCallback(() => {

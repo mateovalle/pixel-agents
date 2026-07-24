@@ -14,19 +14,28 @@ export interface CampusEntry {
 
 /**
  * Owns one OfficeState instance per registered workspace, arranged in a
- * fixed-column grid. All offices share the single global layout; origins are
- * recomputed whenever the workspace list or layout dimensions change.
+ * fixed-column grid. Each office is built from its workspace's own layout
+ * override when one exists, else from the shared default layout. Origins are
+ * recomputed (with per-row/per-column cell sizes, since offices may differ in
+ * dimensions) whenever the workspace list or any layout changes.
  *
  * Imperative (not React state) — same conventions as OfficeState.
  */
 export class CampusState {
   entries: CampusEntry[] = [];
-  /** The single global layout shared by every office (null until layoutLoaded). */
-  private layout: OfficeLayout | null = null;
+  /** The global default layout applied to offices without an override (null until layoutLoaded). */
+  private defaultLayout: OfficeLayout | null = null;
+  /** Per-workspace layout overrides, keyed by workspace path. */
+  private overrides = new Map<string, OfficeLayout>();
   /** Last-clicked workspace path — its office is the edit-mode target. */
   activeWorkspacePath: string | null = null;
   /** Detached office used when no workspaces are registered (never rendered in campus view). */
   private fallbackOffice: OfficeState | null = null;
+
+  /** The layout a given workspace's office should use: override, else default. */
+  private layoutFor(path: string): OfficeLayout | null {
+    return this.overrides.get(path) ?? this.defaultLayout;
+  }
 
   /** Sync entries with the host's workspace list, preserving existing offices. */
   syncWorkspaces(workspaces: WorkspaceInfo[]): void {
@@ -41,7 +50,7 @@ export class CampusState {
       }
       return {
         workspace: ws,
-        office: new OfficeState(this.layout ?? undefined),
+        office: new OfficeState(this.layoutFor(ws.path) ?? undefined),
         originCol: 0,
         originRow: 0,
       };
@@ -56,63 +65,93 @@ export class CampusState {
     this.recomputeOrigins();
   }
 
-  /** Apply a new global layout: rebuild every office and recompute origins. */
-  setLayout(layout: OfficeLayout): void {
-    this.layout = layout;
+  /** Apply a new default layout: rebuild offices without overrides, recompute origins. */
+  setDefaultLayout(layout: OfficeLayout): void {
+    this.defaultLayout = layout;
     for (const e of this.entries) {
-      e.office.rebuildFromLayout(layout);
+      if (!this.overrides.has(e.workspace.path)) e.office.rebuildFromLayout(layout);
     }
     this.fallbackOffice?.rebuildFromLayout(layout);
     this.recomputeOrigins();
   }
 
-  /** Current global layout, or the active office's default when none loaded yet. */
-  getLayout(): OfficeLayout {
-    return this.layout ?? this.getActiveOffice().getLayout();
+  /** Store a workspace's own layout and rebuild just that office. */
+  setWorkspaceLayout(path: string, layout: OfficeLayout): void {
+    this.overrides.set(path, layout);
+    this.getEntry(path)?.office.rebuildFromLayout(layout);
+    this.recomputeOrigins();
   }
 
-  /** Adopt the active office's (possibly edited) layout as the global one. */
+  /** Current default layout, or the active office's layout when none loaded yet. */
+  getLayout(): OfficeLayout {
+    return this.defaultLayout ?? this.getActiveOffice().getLayout();
+  }
+
+  /**
+   * Adopt the active office's (possibly edited) layout on editor exit: it
+   * becomes that workspace's own override, or the default layout when the
+   * active office is the detached fallback (no workspace).
+   */
   adoptLayoutFromActive(): void {
     const active = this.getActiveOffice();
     const layout = active.getLayout();
-    this.layout = layout;
-    for (const e of this.entries) {
-      if (e.office !== active) e.office.rebuildFromLayout(layout);
-    }
-    if (this.fallbackOffice && this.fallbackOffice !== active) {
-      this.fallbackOffice.rebuildFromLayout(layout);
+    const entry = this.entries.find((e) => e.office === active);
+    if (entry) {
+      this.overrides.set(entry.workspace.path, layout);
+    } else {
+      this.defaultLayout = layout;
     }
     this.recomputeOrigins();
   }
 
-  /** Arrange offices in a fixed-column grid spaced by layout size + gap. */
-  private recomputeOrigins(): void {
-    const { cols, rows } = this.cellSize();
-    for (let i = 0; i < this.entries.length; i++) {
-      this.entries[i].originCol = (i % CAMPUS_GRID_COLS) * cols;
-      this.entries[i].originRow = Math.floor(i / CAMPUS_GRID_COLS) * rows;
-    }
+  /** Workspace path of the active office, or null when it's the detached fallback. */
+  getActiveOfficePath(): string | null {
+    const active = this.getActiveOffice();
+    const entry = this.entries.find((e) => e.office === active);
+    return entry ? entry.workspace.path : null;
   }
 
-  /** Grid cell size in tiles (office + gap). */
-  private cellSize(): { cols: number; rows: number } {
-    const layout = this.layout ?? this.entries[0]?.office.getLayout();
-    const cols = (layout?.cols ?? 0) + CAMPUS_GAP_TILES;
-    const rows = (layout?.rows ?? 0) + CAMPUS_GAP_TILES;
-    return { cols, rows };
+  /**
+   * Arrange offices in a fixed-column grid. Offices may differ in size, so
+   * each grid column is as wide as its widest office and each grid row as
+   * tall as its tallest office (plus the campus gap).
+   */
+  private recomputeOrigins(): void {
+    const colWidths: number[] = [];
+    const rowHeights: number[] = [];
+    for (let i = 0; i < this.entries.length; i++) {
+      const layout = this.entries[i].office.getLayout();
+      const gc = i % CAMPUS_GRID_COLS;
+      const gr = Math.floor(i / CAMPUS_GRID_COLS);
+      colWidths[gc] = Math.max(colWidths[gc] ?? 0, layout.cols);
+      rowHeights[gr] = Math.max(rowHeights[gr] ?? 0, layout.rows);
+    }
+    const colOrigins: number[] = [];
+    let acc = 0;
+    for (let c = 0; c < colWidths.length; c++) {
+      colOrigins[c] = acc;
+      acc += colWidths[c] + CAMPUS_GAP_TILES;
+    }
+    const rowOrigins: number[] = [];
+    acc = 0;
+    for (let r = 0; r < rowHeights.length; r++) {
+      rowOrigins[r] = acc;
+      acc += rowHeights[r] + CAMPUS_GAP_TILES;
+    }
+    for (let i = 0; i < this.entries.length; i++) {
+      this.entries[i].originCol = colOrigins[i % CAMPUS_GRID_COLS];
+      this.entries[i].originRow = rowOrigins[Math.floor(i / CAMPUS_GRID_COLS)];
+    }
   }
 
   /** Total campus size in sprite px (bounding box of all offices, no trailing gap). */
   getPixelSize(): { w: number; h: number } {
-    if (this.entries.length === 0) return { w: 0, h: 0 };
-    const layout = this.getLayout();
-    const officeW = layout.cols * TILE_SIZE;
-    const officeH = layout.rows * TILE_SIZE;
     let maxX = 0;
     let maxY = 0;
     for (const e of this.entries) {
-      maxX = Math.max(maxX, e.originCol * TILE_SIZE + officeW);
-      maxY = Math.max(maxY, e.originRow * TILE_SIZE + officeH);
+      const layout = e.office.getLayout();
+      maxX = Math.max(maxX, (e.originCol + layout.cols) * TILE_SIZE);
+      maxY = Math.max(maxY, (e.originRow + layout.rows) * TILE_SIZE);
     }
     return { w: maxX, h: maxY };
   }
@@ -134,7 +173,7 @@ export class CampusState {
     }
     if (this.entries.length > 0) return this.entries[0].office;
     if (!this.fallbackOffice) {
-      this.fallbackOffice = new OfficeState(this.layout ?? undefined);
+      this.fallbackOffice = new OfficeState(this.defaultLayout ?? undefined);
     }
     return this.fallbackOffice;
   }
@@ -189,11 +228,10 @@ export class CampusState {
 
   /** The entry whose office bounds contain a campus-world point, or null. */
   getEntryAt(worldX: number, worldY: number): CampusEntry | null {
-    const layout = this.entries.length > 0 ? this.getLayout() : null;
-    if (!layout) return null;
-    const w = layout.cols * TILE_SIZE;
-    const h = layout.rows * TILE_SIZE;
     for (const e of this.entries) {
+      const layout = e.office.getLayout();
+      const w = layout.cols * TILE_SIZE;
+      const h = layout.rows * TILE_SIZE;
       const ox = e.originCol * TILE_SIZE;
       const oy = e.originRow * TILE_SIZE;
       if (worldX >= ox && worldX < ox + w && worldY >= oy && worldY < oy + h) return e;

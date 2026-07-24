@@ -133,12 +133,17 @@ export function useExtensionMessages(
         }
         const rawLayout = msg.layout as OfficeLayout | null;
         const layout = rawLayout && rawLayout.version === 1 ? migrateLayoutColors(rawLayout) : null;
+        if (msg.workspacePath !== undefined) {
+          // Per-workspace layout — override just that workspace's office
+          if (layout) campus.setWorkspaceLayout(msg.workspacePath, layout);
+          return;
+        }
         if (layout) {
-          campus.setLayout(layout);
+          campus.setDefaultLayout(layout);
           onLayoutLoadedRef.current?.(layout);
         } else {
-          // Default layout — adopt whatever the active OfficeState built
-          campus.adoptLayoutFromActive();
+          // No saved default — adopt whatever the active OfficeState built
+          campus.setDefaultLayout(campus.getActiveOffice().getLayout());
           onLayoutLoadedRef.current?.(campus.getLayout());
         }
         layoutReadyRef.current = true;
