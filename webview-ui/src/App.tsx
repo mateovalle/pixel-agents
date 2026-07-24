@@ -154,7 +154,6 @@ function App() {
     subagentCharacters,
     layoutReady,
     loadedAssets,
-    workspaceFolders,
     workspaces,
   } = useExtensionMessages(campus, editor.setLastSavedLayout, isEditDirty);
 
@@ -245,10 +244,6 @@ function App() {
 
   const handleSelectAgent = useCallback((id: number) => {
     vscode.postMessage({ type: 'focusAgent', id });
-  }, []);
-
-  const handleOpenChatAgent = useCallback(() => {
-    vscode.postMessage({ type: 'openChatAgent' });
   }, []);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -375,12 +370,9 @@ function App() {
 
         <BottomToolbar
           isEditMode={editor.isEditMode}
-          onOpenClaude={editor.handleOpenClaude}
-          onOpenChatAgent={handleOpenChatAgent}
           onToggleEditMode={editor.handleToggleEditMode}
           isDebugMode={isDebugMode}
           onToggleDebugMode={handleToggleDebugMode}
-          workspaceFolders={workspaceFolders}
         />
 
         {editor.isEditMode && editor.isDirty && (

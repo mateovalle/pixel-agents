@@ -1,21 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 
-import type { WorkspaceFolder } from '../hooks/useExtensionMessages.js';
 import { vscode } from '../vscodeApi.js';
 import { SettingsModal } from './SettingsModal.js';
 
 interface BottomToolbarProps {
   isEditMode: boolean;
-  onOpenClaude: () => void;
-  onOpenChatAgent: () => void;
   onToggleEditMode: () => void;
   isDebugMode: boolean;
   onToggleDebugMode: () => void;
-  workspaceFolders: WorkspaceFolder[];
 }
-
-/** Which kind of agent the open folder-picker will launch. */
-type AgentKind = 'chat' | 'terminal';
 
 const panelStyle: React.CSSProperties = {
   position: 'absolute',
@@ -50,134 +43,15 @@ const btnActive: React.CSSProperties = {
 
 export function BottomToolbar({
   isEditMode,
-  onOpenClaude,
-  onOpenChatAgent,
   onToggleEditMode,
   isDebugMode,
   onToggleDebugMode,
-  workspaceFolders,
 }: BottomToolbarProps) {
   const [hovered, setHovered] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [folderPickerKind, setFolderPickerKind] = useState<AgentKind | null>(null);
-  const [hoveredFolder, setHoveredFolder] = useState<number | null>(null);
-  const folderPickerRef = useRef<HTMLDivElement>(null);
-
-  const isFolderPickerOpen = folderPickerKind !== null;
-
-  // Close folder picker on outside click
-  useEffect(() => {
-    if (!isFolderPickerOpen) return;
-    const handleClick = (e: MouseEvent) => {
-      if (folderPickerRef.current && !folderPickerRef.current.contains(e.target as Node)) {
-        setFolderPickerKind(null);
-      }
-    };
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [isFolderPickerOpen]);
-
-  const hasMultipleFolders = workspaceFolders.length > 1;
-
-  const handleAgentClick = (kind: AgentKind) => {
-    if (hasMultipleFolders) {
-      setFolderPickerKind((prev) => (prev === kind ? null : kind));
-    } else if (kind === 'chat') {
-      onOpenChatAgent();
-    } else {
-      onOpenClaude();
-    }
-  };
-
-  const handleFolderSelect = (folder: WorkspaceFolder) => {
-    const kind = folderPickerKind;
-    setFolderPickerKind(null);
-    if (kind === 'terminal') {
-      vscode.postMessage({ type: 'openClaude', folderPath: folder.path });
-    } else {
-      vscode.postMessage({ type: 'openChatAgent', folderPath: folder.path });
-    }
-  };
 
   return (
     <div style={panelStyle}>
-      <div ref={folderPickerRef} style={{ position: 'relative' }}>
-        <button
-          onClick={() => handleAgentClick('chat')}
-          onMouseEnter={() => setHovered('agent')}
-          onMouseLeave={() => setHovered(null)}
-          style={{
-            ...btnBase,
-            padding: '5px 12px',
-            background:
-              hovered === 'agent' || folderPickerKind === 'chat'
-                ? 'var(--pixel-agent-hover-bg)'
-                : 'var(--pixel-agent-bg)',
-            border: '2px solid var(--pixel-agent-border)',
-            color: 'var(--pixel-agent-text)',
-          }}
-          title="Open a chat agent"
-        >
-          + Agent
-        </button>
-        <button
-          onClick={() => vscode.postMessage({ type: 'listResumableSessions' })}
-          onMouseEnter={() => setHovered('resume')}
-          onMouseLeave={() => setHovered(null)}
-          style={{
-            ...btnBase,
-            padding: '5px 8px',
-            fontSize: '20px',
-            marginLeft: 4,
-            background: hovered === 'resume' ? 'var(--pixel-btn-hover-bg)' : btnBase.background,
-            border: '2px solid var(--pixel-border)',
-            color: 'var(--pixel-text-dim)',
-          }}
-          title="Resume a past session as a chat agent"
-        >
-          Resume
-        </button>
-        {isFolderPickerOpen && (
-          <div
-            style={{
-              position: 'absolute',
-              bottom: '100%',
-              left: 0,
-              marginBottom: 4,
-              background: 'var(--pixel-bg)',
-              border: '2px solid var(--pixel-border)',
-              borderRadius: 0,
-              boxShadow: 'var(--pixel-shadow)',
-              minWidth: 160,
-              zIndex: 'var(--pixel-controls-z)',
-            }}
-          >
-            {workspaceFolders.map((folder, i) => (
-              <button
-                key={folder.path}
-                onClick={() => handleFolderSelect(folder)}
-                onMouseEnter={() => setHoveredFolder(i)}
-                onMouseLeave={() => setHoveredFolder(null)}
-                style={{
-                  display: 'block',
-                  width: '100%',
-                  textAlign: 'left',
-                  padding: '6px 10px',
-                  fontSize: '22px',
-                  color: 'var(--pixel-text)',
-                  background: hoveredFolder === i ? 'var(--pixel-btn-hover-bg)' : 'transparent',
-                  border: 'none',
-                  borderRadius: 0,
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {folder.name}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
       <button
         onClick={() => vscode.postMessage({ type: 'addWorkspace' })}
         onMouseEnter={() => setHovered('workspace')}
