@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { getElectronAPI } from '../vscodeApi.js';
 import { TerminalInstance } from './TerminalInstance.js';
@@ -12,68 +12,48 @@ interface TerminalPanelProps {
   onAllTabsClosed: () => void;
 }
 
-export function TerminalPanel({ height, onTerminalCreated, onShowTerminal, onAllTabsClosed }: TerminalPanelProps) {
+export function TerminalPanel({
+  height,
+  onTerminalCreated,
+  onShowTerminal,
+  onAllTabsClosed,
+}: TerminalPanelProps) {
   const [tabs, setTabs] = useState<TerminalTab[]>([]);
   const [activeTab, setActiveTab] = useState<string | null>(null);
-  const nextLabelRef = useRef(1);
+
+  // Notify closure outside the setState updater (updaters must stay pure)
+  useEffect(() => {
+    if (tabs.length === 0) {
+      onAllTabsClosed();
+    }
+  }, [tabs.length, onAllTabsClosed]);
+
+  const closeTab = useCallback((ptyId: string) => {
+    setTabs((prev) => prev.filter((t) => t.ptyId !== ptyId));
+    setActiveTab((prevActive) => (prevActive === ptyId ? null : prevActive));
+  }, []);
 
   const handleClose = useCallback(
     (ptyId: string) => {
-      const api = getElectronAPI();
-      api?.ptyKill?.(ptyId);
-      setTabs((prev) => {
-        const next = prev.filter((t) => t.ptyId !== ptyId);
-        if (next.length === 0) {
-          onAllTabsClosed();
-        }
-        // Update active tab within the same state snapshot to avoid stale closure
-        setActiveTab((prevActive) => {
-          if (prevActive !== ptyId) return prevActive;
-          return next.length > 0 ? next[next.length - 1].ptyId : null;
-        });
-        return next;
-      });
+      getElectronAPI()?.ptyKill?.(ptyId);
+      closeTab(ptyId);
     },
-    [onAllTabsClosed],
+    [closeTab],
   );
 
   useEffect(() => {
-    const api = getElectronAPI();
-
     const handler = (e: MessageEvent) => {
       const msg = e.data;
 
       if (msg.type === 'pty-created') {
-        const { ptyId, sessionId, cwd, shellOnly } = msg;
-        const label = `Agent ${nextLabelRef.current++}`;
-
+        // The PTY is spawned by the main process; the renderer only shows it.
+        const { ptyId, label } = msg;
         setTabs((prev) => {
           if (prev.some((t) => t.ptyId === ptyId)) return prev;
           return [...prev, { ptyId, label, exited: false }];
         });
         setActiveTab(ptyId);
         onTerminalCreated();
-
-        // Spawn PTY — either a plain shell (for existing agents) or claude with session
-        const shell = navigator.platform.startsWith('Win')
-          ? 'powershell.exe'
-          : undefined; // Let main process pick default shell
-        if (shellOnly) {
-          // Open a plain shell in the agent's project directory
-          api?.ptySpawn?.({
-            id: ptyId,
-            cmd: shell || '',
-            args: [],
-            cwd: cwd || '',
-          });
-        } else {
-          api?.ptySpawn?.({
-            id: ptyId,
-            cmd: shell || '',
-            args: ['-c', `claude --session-id ${sessionId}`],
-            cwd: cwd || '',
-          });
-        }
       } else if (msg.type === 'pty-focus') {
         const { ptyId } = msg;
         if (ptyId) {
@@ -81,29 +61,16 @@ export function TerminalPanel({ height, onTerminalCreated, onShowTerminal, onAll
         }
         onShowTerminal();
       } else if (msg.type === 'pty-close-tab') {
-        const { ptyId } = msg;
-        setTabs((prev) => {
-          const next = prev.filter((t) => t.ptyId !== ptyId);
-          if (next.length === 0) {
-            onAllTabsClosed();
-          }
-          return next;
-        });
-        setActiveTab((prev) => {
-          if (prev !== ptyId) return prev;
-          return null;
-        });
+        closeTab(msg.ptyId);
       } else if (msg.type === 'pty-exit') {
         const { ptyId } = msg;
-        setTabs((prev) =>
-          prev.map((t) => (t.ptyId === ptyId ? { ...t, exited: true } : t)),
-        );
+        setTabs((prev) => prev.map((t) => (t.ptyId === ptyId ? { ...t, exited: true } : t)));
       }
     };
 
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
-  }, [onTerminalCreated, onShowTerminal]);
+  }, [onTerminalCreated, onShowTerminal, closeTab]);
 
   const shouldShow = tabs.length > 0 && height > 0;
 
@@ -126,11 +93,7 @@ export function TerminalPanel({ height, onTerminalCreated, onShowTerminal, onAll
       />
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         {tabs.map((tab) => (
-          <TerminalInstance
-            key={tab.ptyId}
-            ptyId={tab.ptyId}
-            visible={tab.ptyId === activeTab}
-          />
+          <TerminalInstance key={tab.ptyId} ptyId={tab.ptyId} visible={tab.ptyId === activeTab} />
         ))}
       </div>
     </div>

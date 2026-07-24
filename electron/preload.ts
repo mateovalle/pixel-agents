@@ -1,17 +1,18 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
+// Deliberately minimal surface: the renderer can pass messages, keystrokes,
+// and terminal geometry — it can never specify a command to execute.
 contextBridge.exposeInMainWorld('electronAPI', {
   postMessage: (msg: unknown) => ipcRenderer.send('webview-message', msg),
-  onMessage: (callback: (data: unknown) => void) => {
-    ipcRenderer.on('main-message', (_event, data) => callback(data));
+  onMessage: (callback: (data: unknown) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, data: unknown) => callback(data);
+    ipcRenderer.on('main-message', listener);
+    return () => ipcRenderer.removeListener('main-message', listener);
   },
   // PTY channels
-  ptySpawn: (opts: { id: string; cmd: string; args: string[]; cwd: string }) =>
-    ipcRenderer.invoke('pty-spawn', opts),
-  ptyInput: (id: string, data: string) =>
-    ipcRenderer.send('pty-input', { id, data }),
+  ptyInput: (id: string, data: string) => ipcRenderer.send('pty-input', { id, data }),
   ptyResize: (id: string, cols: number, rows: number) =>
     ipcRenderer.send('pty-resize', { id, cols, rows }),
-  ptyKill: (id: string) =>
-    ipcRenderer.send('pty-kill', { id }),
+  ptyKill: (id: string) => ipcRenderer.send('pty-kill', { id }),
+  ptyReady: (id: string) => ipcRenderer.send('pty-ready', { id }),
 });

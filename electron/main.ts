@@ -1,74 +1,124 @@
-import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron';
+import { execFileSync } from 'child_process';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import * as fs from 'fs';
+import * as pty from 'node-pty';
 import * as os from 'os';
 import * as path from 'path';
-import { PNG } from 'pngjs';
-import * as pty from 'node-pty';
 
-// ── Constants ────────────────────────────────────────────────
-const POLL_INTERVAL_MS = 2000;
-const TOOL_DONE_DELAY_MS = 300;
-const PERMISSION_TIMER_DELAY_MS = 7000;
-const TEXT_IDLE_DELAY_MS = 5000;
-const PNG_ALPHA_THRESHOLD = 128;
-const SCAN_INTERVAL_MS = 3000;
+import {
+  loadCharacterSprites,
+  loadDefaultLayout,
+  loadFloorTiles,
+  loadFurnitureAssets,
+  loadWallTiles,
+  sendAssets,
+  sendCharacterSprites,
+  sendFloorTiles,
+  sendWallTiles,
+} from '../src/core/assetLoader.js';
+import { LAYOUT_FILE_DIR } from '../src/core/constants.js';
+import { readNewLines, startFileWatching } from '../src/core/fileWatcher.js';
+import type { LayoutWatcher } from '../src/core/layoutPersistence.js';
+import {
+  isValidLayout,
+  readLayoutFromFile,
+  watchLayoutFile,
+  writeLayoutToFile,
+} from '../src/core/layoutPersistence.js';
+import {
+  type CoreAgentState,
+  createCoreAgentState,
+  type TrackerContext,
+} from '../src/core/types.js';
+
+// ── Electron-specific constants ──────────────────────────────
+const SESSION_SCAN_INTERVAL_MS = 3000;
 const SESSION_STALE_MS = 24 * 60 * 60 * 1000; // 24h
+const SESSION_TAIL_BYTES = 4096; // catch-up window when adopting a session
+const PTY_SCROLLBACK_MAX_CHARS = 200_000;
+const WINDOW_WIDTH = 900;
+const WINDOW_HEIGHT = 700;
+const WINDOW_BACKGROUND = '#1e1e2e';
 
-const CHAR_COUNT = 6;
-const CHAR_FRAME_W = 16;
-const CHAR_FRAME_H = 32;
-const CHAR_FRAMES_PER_ROW = 7;
-const CHARACTER_DIRECTIONS = ['down', 'up', 'right'] as const;
-const FLOOR_PATTERN_COUNT = 7;
-const FLOOR_TILE_SIZE = 16;
-const WALL_BITMASK_COUNT = 16;
-const WALL_GRID_COLS = 4;
-const WALL_PIECE_WIDTH = 16;
-const WALL_PIECE_HEIGHT = 32;
-const BASH_COMMAND_DISPLAY_MAX_LENGTH = 30;
-const TASK_DESCRIPTION_DISPLAY_MAX_LENGTH = 40;
-
-const LAYOUT_DIR = path.join(os.homedir(), '.pixel-agents');
-const LAYOUT_FILE = path.join(LAYOUT_DIR, 'layout.json');
-const DISMISSED_SESSIONS_FILE = path.join(LAYOUT_DIR, 'dismissed-sessions.json');
+const DATA_DIR = path.join(os.homedir(), LAYOUT_FILE_DIR);
+const DISMISSED_SESSIONS_FILE = path.join(DATA_DIR, 'dismissed-sessions.json');
+const AGENT_SEATS_FILE = path.join(DATA_DIR, 'agent-seats.json');
+const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
-const PERMISSION_EXEMPT_TOOLS = new Set(['Task', 'AskUserQuestion']);
 
 // ── Types ────────────────────────────────────────────────────
-interface AgentState {
-  id: number;
-  projectDir: string;
-  jsonlFile: string;
-  fileOffset: number;
-  lineBuffer: string;
-  activeToolIds: Set<string>;
-  activeToolStatuses: Map<string, string>;
-  activeToolNames: Map<string, string>;
-  activeSubagentToolIds: Map<string, Set<string>>;
-  activeSubagentToolNames: Map<string, Map<string, string>>;
-  isWaiting: boolean;
-  permissionSent: boolean;
-  hadToolsInTurn: boolean;
+interface AgentState extends CoreAgentState {
   ptyId?: string;
   sessionId?: string;
   cwd?: string; // Workspace path extracted from JSONL
 }
 
-// ── Dismissed Sessions Persistence ───────────────────────────
-function loadDismissedSessions(): string[] {
+interface PtyRecord {
+  proc: pty.IPty;
+  label: string;
+  scrollback: string;
+  sessionId?: string;
+}
+
+interface AgentSeatMeta {
+  palette?: number;
+  seatId?: string;
+  hueShift?: number;
+}
+
+// ── State ────────────────────────────────────────────────────
+let mainWindow: BrowserWindow | null = null;
+let nextAgentId = 1;
+let nextTerminalIndex = 1;
+const knownJsonlFiles = new Set<string>();
+let scanTimer: ReturnType<typeof setInterval> | null = null;
+let layoutWatcher: LayoutWatcher | null = null;
+
+const ctx: TrackerContext<AgentState> = {
+  agents: new Map(),
+  fileWatchers: new Map(),
+  pollingTimers: new Map(),
+  waitingTimers: new Map(),
+  permissionTimers: new Map(),
+  // Resolved at call time so a recreated window keeps receiving messages
+  send: (message) => {
+    mainWindow?.webContents.send('main-message', message);
+  },
+  // Electron does not persist the agent list — sessions are rediscovered by scan
+  persistAgents: () => {},
+};
+
+// PTY state
+const ptys = new Map<string, PtyRecord>();
+const ptySessionIds = new Map<string, string>(); // sessionId → ptyId
+const agentToPty = new Map<number, string>(); // agentId → ptyId
+const ptyToAgent = new Map<string, number>(); // ptyId → agentId
+
+const dismissedJsonlFiles = new Set<string>(loadJsonFile<string[]>(DISMISSED_SESSIONS_FILE) ?? []);
+
+// ── Small JSON persistence helpers ───────────────────────────
+function loadJsonFile<T>(file: string): T | null {
   try {
-    if (fs.existsSync(DISMISSED_SESSIONS_FILE)) {
-      return JSON.parse(fs.readFileSync(DISMISSED_SESSIONS_FILE, 'utf-8'));
+    if (fs.existsSync(file)) {
+      return JSON.parse(fs.readFileSync(file, 'utf-8')) as T;
     }
-  } catch { /* ignore */ }
-  return [];
+  } catch (err) {
+    console.error(`[Pixel Agents] Failed to read ${path.basename(file)}:`, err);
+  }
+  return null;
+}
+
+function saveJsonFile(file: string, value: unknown): void {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(value, null, 2), 'utf-8');
+  } catch (err) {
+    console.error(`[Pixel Agents] Failed to write ${path.basename(file)}:`, err);
+  }
 }
 
 function saveDismissedSessions(): void {
-  try {
-    if (!fs.existsSync(LAYOUT_DIR)) fs.mkdirSync(LAYOUT_DIR, { recursive: true });
-    fs.writeFileSync(DISMISSED_SESSIONS_FILE, JSON.stringify([...dismissedJsonlFiles]), 'utf-8');
-  } catch { /* ignore */ }
+  saveJsonFile(DISMISSED_SESSIONS_FILE, [...dismissedJsonlFiles]);
 }
 
 function cleanupDismissedSessions(): void {
@@ -80,6 +130,18 @@ function cleanupDismissedSessions(): void {
     }
   }
   if (changed) saveDismissedSessions();
+}
+
+// Seat/palette metadata is keyed by SESSION id, not agent id — agent ids are
+// assigned in discovery order and are not stable across app restarts.
+function loadSeatMetaBySession(): Record<string, AgentSeatMeta> {
+  return (
+    loadJsonFile<{ bySession?: Record<string, AgentSeatMeta> }>(AGENT_SEATS_FILE)?.bySession ?? {}
+  );
+}
+
+function loadSettings(): { soundEnabled: boolean } {
+  return { soundEnabled: true, ...loadJsonFile<{ soundEnabled?: boolean }>(SETTINGS_FILE) };
 }
 
 /** Read the first user message from a JSONL file to extract the workspace cwd. */
@@ -96,615 +158,112 @@ function extractCwdFromJsonl(jsonlFile: string): string | undefined {
       try {
         const record = JSON.parse(line);
         if (record.cwd) return record.cwd;
-      } catch { /* partial line */ }
+      } catch {
+        /* partial line */
+      }
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   return undefined;
-}
-
-// ── State ────────────────────────────────────────────────────
-let mainWindow: BrowserWindow | null = null;
-const agents = new Map<number, AgentState>();
-let nextAgentId = 1;
-const knownJsonlFiles = new Set<string>();
-const dismissedJsonlFiles = new Set<string>(loadDismissedSessions());
-const fileWatchers = new Map<number, fs.FSWatcher>();
-const pollingTimers = new Map<number, ReturnType<typeof setInterval>>();
-const waitingTimers = new Map<number, ReturnType<typeof setTimeout>>();
-const permissionTimers = new Map<number, ReturnType<typeof setTimeout>>();
-let scanTimer: ReturnType<typeof setInterval> | null = null;
-
-// PTY state
-const ptyProcesses = new Map<string, pty.IPty>();
-const ptySessionIds = new Map<string, string>(); // sessionId → ptyId
-const agentToPty = new Map<number, string>();     // agentId → ptyId
-const ptyToAgent = new Map<string, number>();      // ptyId → agentId
-
-// ── Helpers ──────────────────────────────────────────────────
-function send(msg: unknown): void {
-  mainWindow?.webContents.send('main-message', msg);
 }
 
 function getAssetsRoot(): string {
   if (app.isPackaged) {
     return path.join(process.resourcesPath, 'assets');
   }
-  return path.join(__dirname, '..', 'webview-ui', 'public', 'assets');
+  // __dirname is dist-electron/electron in dev builds
+  return path.join(__dirname, '..', '..', 'webview-ui', 'public', 'assets');
 }
 
-// ── PNG Parsing ──────────────────────────────────────────────
-function pngToSpriteData(pngBuffer: Buffer, width: number, height: number): string[][] {
+/**
+ * Apps launched from Finder/Dock get launchd's minimal PATH, so `claude`
+ * (typically installed via a shell profile) would not be found. Resolve the
+ * user's login-shell PATH once at startup and merge it into process.env.
+ */
+function fixPathEnv(): void {
+  if (process.platform === 'win32') return;
   try {
-    const png = PNG.sync.read(pngBuffer);
-    const sprite: string[][] = [];
-    for (let y = 0; y < height; y++) {
-      const row: string[] = [];
-      for (let x = 0; x < width; x++) {
-        const idx = (y * png.width + x) * 4;
-        const r = png.data[idx];
-        const g = png.data[idx + 1];
-        const b = png.data[idx + 2];
-        const a = png.data[idx + 3];
-        if (a < PNG_ALPHA_THRESHOLD) {
-          row.push('');
-        } else {
-          row.push(
-            `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`.toUpperCase(),
-          );
-        }
-      }
-      sprite.push(row);
+    const userShell = process.env.SHELL || '/bin/zsh';
+    const loginPath = execFileSync(userShell, ['-l', '-c', 'echo -n "$PATH"'], {
+      encoding: 'utf-8',
+      timeout: 5000,
+    });
+    if (loginPath && loginPath.length > (process.env.PATH?.length ?? 0)) {
+      process.env.PATH = loginPath;
     }
-    return sprite;
-  } catch {
-    return Array.from({ length: height }, () => new Array(width).fill(''));
-  }
-}
-
-// ── Asset Loading ────────────────────────────────────────────
-function loadCharacterSprites(assetsRoot: string): void {
-  try {
-    const charDir = path.join(assetsRoot, 'characters');
-    const characters: Array<{ down: string[][][]; up: string[][][]; right: string[][][] }> = [];
-
-    for (let ci = 0; ci < CHAR_COUNT; ci++) {
-      const filePath = path.join(charDir, `char_${ci}.png`);
-      if (!fs.existsSync(filePath)) return;
-      const png = PNG.sync.read(fs.readFileSync(filePath));
-      const charData: { down: string[][][]; up: string[][][]; right: string[][][] } = {
-        down: [],
-        up: [],
-        right: [],
-      };
-      for (let dirIdx = 0; dirIdx < CHARACTER_DIRECTIONS.length; dirIdx++) {
-        const dir = CHARACTER_DIRECTIONS[dirIdx];
-        const rowY = dirIdx * CHAR_FRAME_H;
-        const frames: string[][][] = [];
-        for (let f = 0; f < CHAR_FRAMES_PER_ROW; f++) {
-          const sprite: string[][] = [];
-          const frameX = f * CHAR_FRAME_W;
-          for (let y = 0; y < CHAR_FRAME_H; y++) {
-            const row: string[] = [];
-            for (let x = 0; x < CHAR_FRAME_W; x++) {
-              const idx = ((rowY + y) * png.width + (frameX + x)) * 4;
-              const r = png.data[idx];
-              const g = png.data[idx + 1];
-              const b = png.data[idx + 2];
-              const a = png.data[idx + 3];
-              row.push(
-                a < PNG_ALPHA_THRESHOLD
-                  ? ''
-                  : `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`.toUpperCase(),
-              );
-            }
-            sprite.push(row);
-          }
-          frames.push(sprite);
-        }
-        charData[dir] = frames;
-      }
-      characters.push(charData);
-    }
-    send({ type: 'characterSpritesLoaded', characters });
   } catch (err) {
-    console.error('Failed to load character sprites:', err);
+    console.error('[Pixel Agents] Could not resolve login-shell PATH:', err);
   }
 }
 
-function loadFloorTiles(assetsRoot: string): void {
-  try {
-    const floorPath = path.join(assetsRoot, 'floors.png');
-    if (!fs.existsSync(floorPath)) return;
-    const png = PNG.sync.read(fs.readFileSync(floorPath));
-    const sprites: string[][][] = [];
-    for (let t = 0; t < FLOOR_PATTERN_COUNT; t++) {
-      const sprite: string[][] = [];
-      for (let y = 0; y < FLOOR_TILE_SIZE; y++) {
-        const row: string[] = [];
-        for (let x = 0; x < FLOOR_TILE_SIZE; x++) {
-          const px = t * FLOOR_TILE_SIZE + x;
-          const idx = (y * png.width + px) * 4;
-          const r = png.data[idx];
-          const g = png.data[idx + 1];
-          const b = png.data[idx + 2];
-          const a = png.data[idx + 3];
-          row.push(
-            a < PNG_ALPHA_THRESHOLD
-              ? ''
-              : `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`.toUpperCase(),
-          );
-        }
-        sprite.push(row);
-      }
-      sprites.push(sprite);
+// ── PTY management ───────────────────────────────────────────
+// The main process constructs and spawns all commands itself — the renderer
+// never supplies a command line (it only carries user keystrokes/resizes).
+function spawnPty(opts: {
+  cwd?: string;
+  command?: string;
+  sessionId?: string;
+  label: string;
+}): string {
+  const ptyId = crypto.randomUUID();
+  const isWin = process.platform === 'win32';
+  const userShell = isWin ? 'powershell.exe' : process.env.SHELL || '/bin/zsh';
+  // Login shell so the user's profile PATH applies inside the terminal too
+  const args = opts.command
+    ? isWin
+      ? ['-NoLogo', '-Command', opts.command]
+      : ['-l', '-c', opts.command]
+    : isWin
+      ? []
+      : ['-l'];
+
+  const proc = pty.spawn(userShell, args, {
+    name: 'xterm-256color',
+    cols: 80,
+    rows: 24,
+    cwd: opts.cwd || os.homedir(),
+    env: { ...process.env, TERM: 'xterm-256color' } as Record<string, string>,
+  });
+
+  const record: PtyRecord = { proc, label: opts.label, scrollback: '', sessionId: opts.sessionId };
+  ptys.set(ptyId, record);
+  if (opts.sessionId) {
+    ptySessionIds.set(opts.sessionId, ptyId);
+  }
+
+  proc.onData((data) => {
+    // Scrollback is replayed to (re)mounted terminal tabs — see 'pty-ready'
+    record.scrollback = (record.scrollback + data).slice(-PTY_SCROLLBACK_MAX_CHARS);
+    ctx.send({ type: 'pty-output', ptyId, data });
+  });
+
+  proc.onExit(({ exitCode }) => {
+    ctx.send({ type: 'pty-exit', ptyId, exitCode });
+    ptys.delete(ptyId);
+    if (record.sessionId && ptySessionIds.get(record.sessionId) === ptyId) {
+      ptySessionIds.delete(record.sessionId);
     }
-    send({ type: 'floorTilesLoaded', sprites });
-  } catch (err) {
-    console.error('Failed to load floor tiles:', err);
-  }
-}
-
-function loadWallTiles(assetsRoot: string): void {
-  try {
-    const wallPath = path.join(assetsRoot, 'walls.png');
-    if (!fs.existsSync(wallPath)) return;
-    const png = PNG.sync.read(fs.readFileSync(wallPath));
-    const sprites: string[][][] = [];
-    for (let mask = 0; mask < WALL_BITMASK_COUNT; mask++) {
-      const ox = (mask % WALL_GRID_COLS) * WALL_PIECE_WIDTH;
-      const oy = Math.floor(mask / WALL_GRID_COLS) * WALL_PIECE_HEIGHT;
-      const sprite: string[][] = [];
-      for (let r = 0; r < WALL_PIECE_HEIGHT; r++) {
-        const row: string[] = [];
-        for (let c = 0; c < WALL_PIECE_WIDTH; c++) {
-          const idx = ((oy + r) * png.width + (ox + c)) * 4;
-          const rv = png.data[idx];
-          const gv = png.data[idx + 1];
-          const bv = png.data[idx + 2];
-          const av = png.data[idx + 3];
-          row.push(
-            av < PNG_ALPHA_THRESHOLD
-              ? ''
-              : `#${rv.toString(16).padStart(2, '0')}${gv.toString(16).padStart(2, '0')}${bv.toString(16).padStart(2, '0')}`.toUpperCase(),
-          );
-        }
-        sprite.push(row);
-      }
-      sprites.push(sprite);
-    }
-    send({ type: 'wallTilesLoaded', sprites });
-  } catch (err) {
-    console.error('Failed to load wall tiles:', err);
-  }
-}
-
-function loadFurnitureAssets(assetsRoot: string): void {
-  try {
-    const catalogPath = path.join(assetsRoot, 'furniture', 'furniture-catalog.json');
-    if (!fs.existsSync(catalogPath)) return;
-    const catalogData = JSON.parse(fs.readFileSync(catalogPath, 'utf-8'));
-    const catalog = catalogData.assets || [];
-    const sprites: Record<string, string[][]> = {};
-
-    for (const asset of catalog) {
-      try {
-        let filePath = asset.file;
-        if (!filePath.startsWith('assets/')) filePath = `assets/${filePath}`;
-        // Resolve relative to parent of assetsRoot (since assetsRoot IS the assets dir)
-        const assetPath = path.join(assetsRoot, '..', filePath);
-        if (!fs.existsSync(assetPath)) {
-          // Try directly in assetsRoot
-          const altPath = path.join(assetsRoot, filePath.replace(/^assets\//, ''));
-          if (fs.existsSync(altPath)) {
-            sprites[asset.id] = pngToSpriteData(fs.readFileSync(altPath), asset.width, asset.height);
-          }
-          continue;
-        }
-        sprites[asset.id] = pngToSpriteData(fs.readFileSync(assetPath), asset.width, asset.height);
-      } catch {
-        // skip
+    const agentId = ptyToAgent.get(ptyId);
+    if (agentId !== undefined) {
+      agentToPty.delete(agentId);
+      ptyToAgent.delete(ptyId);
+      const agent = ctx.agents.get(agentId);
+      if (agent && agent.ptyId === ptyId) {
+        agent.ptyId = undefined;
       }
     }
-    send({ type: 'furnitureAssetsLoaded', catalog, sprites });
-  } catch (err) {
-    console.error('Failed to load furniture assets:', err);
-  }
+  });
+
+  return ptyId;
 }
 
-function loadDefaultLayout(assetsRoot: string): Record<string, unknown> | null {
+function killPty(ptyId: string): void {
   try {
-    const layoutPath = path.join(assetsRoot, 'default-layout.json');
-    if (!fs.existsSync(layoutPath)) return null;
-    return JSON.parse(fs.readFileSync(layoutPath, 'utf-8'));
+    ptys.get(ptyId)?.proc.kill();
   } catch {
-    return null;
+    /* already dead */
   }
-}
-
-// ── Layout Persistence ───────────────────────────────────────
-function readLayout(): Record<string, unknown> | null {
-  try {
-    if (!fs.existsSync(LAYOUT_FILE)) return null;
-    return JSON.parse(fs.readFileSync(LAYOUT_FILE, 'utf-8'));
-  } catch {
-    return null;
-  }
-}
-
-function writeLayout(layout: Record<string, unknown>): void {
-  try {
-    if (!fs.existsSync(LAYOUT_DIR)) fs.mkdirSync(LAYOUT_DIR, { recursive: true });
-    const tmp = LAYOUT_FILE + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(layout, null, 2), 'utf-8');
-    fs.renameSync(tmp, LAYOUT_FILE);
-  } catch (err) {
-    console.error('Failed to write layout:', err);
-  }
-}
-
-// ── Transcript Parsing ───────────────────────────────────────
-function formatToolStatus(toolName: string, input: Record<string, unknown>): string {
-  const base = (p: unknown) => (typeof p === 'string' ? path.basename(p) : '');
-  switch (toolName) {
-    case 'Read':
-      return `Reading ${base(input.file_path)}`;
-    case 'Edit':
-      return `Editing ${base(input.file_path)}`;
-    case 'Write':
-      return `Writing ${base(input.file_path)}`;
-    case 'Bash': {
-      const cmd = (input.command as string) || '';
-      return `Running: ${cmd.length > BASH_COMMAND_DISPLAY_MAX_LENGTH ? cmd.slice(0, BASH_COMMAND_DISPLAY_MAX_LENGTH) + '\u2026' : cmd}`;
-    }
-    case 'Glob':
-      return 'Searching files';
-    case 'Grep':
-      return 'Searching code';
-    case 'WebFetch':
-      return 'Fetching web content';
-    case 'WebSearch':
-      return 'Searching the web';
-    case 'Task': {
-      const desc = typeof input.description === 'string' ? input.description : '';
-      return desc
-        ? `Subtask: ${desc.length > TASK_DESCRIPTION_DISPLAY_MAX_LENGTH ? desc.slice(0, TASK_DESCRIPTION_DISPLAY_MAX_LENGTH) + '\u2026' : desc}`
-        : 'Running subtask';
-    }
-    case 'AskUserQuestion':
-      return 'Waiting for your answer';
-    case 'EnterPlanMode':
-      return 'Planning';
-    case 'NotebookEdit':
-      return 'Editing notebook';
-    default:
-      return `Using ${toolName}`;
-  }
-}
-
-function cancelWaitingTimer(agentId: number): void {
-  const timer = waitingTimers.get(agentId);
-  if (timer) {
-    clearTimeout(timer);
-    waitingTimers.delete(agentId);
-  }
-}
-
-function startWaitingTimer(agentId: number, delayMs: number): void {
-  cancelWaitingTimer(agentId);
-  const timer = setTimeout(() => {
-    waitingTimers.delete(agentId);
-    const agent = agents.get(agentId);
-    if (agent) agent.isWaiting = true;
-    send({ type: 'agentStatus', id: agentId, status: 'waiting' });
-  }, delayMs);
-  waitingTimers.set(agentId, timer);
-}
-
-function cancelPermissionTimer(agentId: number): void {
-  const timer = permissionTimers.get(agentId);
-  if (timer) {
-    clearTimeout(timer);
-    permissionTimers.delete(agentId);
-  }
-}
-
-function startPermissionTimer(agentId: number): void {
-  cancelPermissionTimer(agentId);
-  const timer = setTimeout(() => {
-    permissionTimers.delete(agentId);
-    const agent = agents.get(agentId);
-    if (!agent) return;
-
-    let hasNonExempt = false;
-    for (const toolId of agent.activeToolIds) {
-      if (!PERMISSION_EXEMPT_TOOLS.has(agent.activeToolNames.get(toolId) || '')) {
-        hasNonExempt = true;
-        break;
-      }
-    }
-
-    const stuckSubagentParentToolIds: string[] = [];
-    for (const [parentToolId, subToolNames] of agent.activeSubagentToolNames) {
-      for (const [, toolName] of subToolNames) {
-        if (!PERMISSION_EXEMPT_TOOLS.has(toolName)) {
-          stuckSubagentParentToolIds.push(parentToolId);
-          hasNonExempt = true;
-          break;
-        }
-      }
-    }
-
-    if (hasNonExempt) {
-      agent.permissionSent = true;
-      send({ type: 'agentToolPermission', id: agentId });
-      for (const parentToolId of stuckSubagentParentToolIds) {
-        send({ type: 'subagentToolPermission', id: agentId, parentToolId });
-      }
-    }
-  }, PERMISSION_TIMER_DELAY_MS);
-  permissionTimers.set(agentId, timer);
-}
-
-function clearAgentActivity(agent: AgentState): void {
-  agent.activeToolIds.clear();
-  agent.activeToolStatuses.clear();
-  agent.activeToolNames.clear();
-  agent.activeSubagentToolIds.clear();
-  agent.activeSubagentToolNames.clear();
-  agent.isWaiting = false;
-  agent.permissionSent = false;
-  cancelPermissionTimer(agent.id);
-  send({ type: 'agentToolsClear', id: agent.id });
-  send({ type: 'agentStatus', id: agent.id, status: 'active' });
-}
-
-function processTranscriptLine(agentId: number, line: string): void {
-  const agent = agents.get(agentId);
-  if (!agent) return;
-  try {
-    const record = JSON.parse(line);
-
-    if (record.type === 'assistant' && Array.isArray(record.message?.content)) {
-      const blocks = record.message.content as Array<{
-        type: string;
-        id?: string;
-        name?: string;
-        input?: Record<string, unknown>;
-      }>;
-      const hasToolUse = blocks.some((b) => b.type === 'tool_use');
-
-      if (hasToolUse) {
-        cancelWaitingTimer(agentId);
-        agent.isWaiting = false;
-        agent.hadToolsInTurn = true;
-        send({ type: 'agentStatus', id: agentId, status: 'active' });
-        let hasNonExemptTool = false;
-        for (const block of blocks) {
-          if (block.type === 'tool_use' && block.id) {
-            const toolName = block.name || '';
-            const status = formatToolStatus(toolName, block.input || {});
-            agent.activeToolIds.add(block.id);
-            agent.activeToolStatuses.set(block.id, status);
-            agent.activeToolNames.set(block.id, toolName);
-            if (!PERMISSION_EXEMPT_TOOLS.has(toolName)) hasNonExemptTool = true;
-            send({ type: 'agentToolStart', id: agentId, toolId: block.id, status });
-          }
-        }
-        if (hasNonExemptTool) startPermissionTimer(agentId);
-      } else if (blocks.some((b) => b.type === 'text') && !agent.hadToolsInTurn) {
-        startWaitingTimer(agentId, TEXT_IDLE_DELAY_MS);
-      }
-    } else if (record.type === 'progress') {
-      processProgressRecord(agentId, record);
-    } else if (record.type === 'user') {
-      const content = record.message?.content;
-      if (Array.isArray(content)) {
-        const hasToolResult = content.some((b: { type: string }) => b.type === 'tool_result');
-        if (hasToolResult) {
-          for (const block of content) {
-            if (block.type === 'tool_result' && block.tool_use_id) {
-              const completedToolId = block.tool_use_id;
-              if (agent.activeToolNames.get(completedToolId) === 'Task') {
-                agent.activeSubagentToolIds.delete(completedToolId);
-                agent.activeSubagentToolNames.delete(completedToolId);
-                send({ type: 'subagentClear', id: agentId, parentToolId: completedToolId });
-              }
-              agent.activeToolIds.delete(completedToolId);
-              agent.activeToolStatuses.delete(completedToolId);
-              agent.activeToolNames.delete(completedToolId);
-              const toolId = completedToolId;
-              setTimeout(() => send({ type: 'agentToolDone', id: agentId, toolId }), TOOL_DONE_DELAY_MS);
-            }
-          }
-          if (agent.activeToolIds.size === 0) agent.hadToolsInTurn = false;
-        } else {
-          cancelWaitingTimer(agentId);
-          clearAgentActivity(agent);
-          agent.hadToolsInTurn = false;
-        }
-      } else if (typeof content === 'string' && content.trim()) {
-        cancelWaitingTimer(agentId);
-        clearAgentActivity(agent);
-        agent.hadToolsInTurn = false;
-      }
-    } else if (record.type === 'system' && record.subtype === 'turn_duration') {
-      cancelWaitingTimer(agentId);
-      cancelPermissionTimer(agentId);
-      if (agent.activeToolIds.size > 0) {
-        agent.activeToolIds.clear();
-        agent.activeToolStatuses.clear();
-        agent.activeToolNames.clear();
-        agent.activeSubagentToolIds.clear();
-        agent.activeSubagentToolNames.clear();
-        send({ type: 'agentToolsClear', id: agentId });
-      }
-      agent.isWaiting = true;
-      agent.permissionSent = false;
-      agent.hadToolsInTurn = false;
-      send({ type: 'agentStatus', id: agentId, status: 'waiting' });
-    }
-  } catch {
-    // Ignore malformed lines
-  }
-}
-
-function processProgressRecord(agentId: number, record: Record<string, unknown>): void {
-  const agent = agents.get(agentId);
-  if (!agent) return;
-
-  const parentToolId = record.parentToolUseID as string | undefined;
-  if (!parentToolId) return;
-  const data = record.data as Record<string, unknown> | undefined;
-  if (!data) return;
-
-  const dataType = data.type as string | undefined;
-  if (dataType === 'bash_progress' || dataType === 'mcp_progress') {
-    if (agent.activeToolIds.has(parentToolId)) startPermissionTimer(agentId);
-    return;
-  }
-
-  if (agent.activeToolNames.get(parentToolId) !== 'Task') return;
-  const msg = data.message as Record<string, unknown> | undefined;
-  if (!msg) return;
-
-  const msgType = msg.type as string;
-  const innerMsg = msg.message as Record<string, unknown> | undefined;
-  const content = innerMsg?.content;
-  if (!Array.isArray(content)) return;
-
-  if (msgType === 'assistant') {
-    let hasNonExemptSubTool = false;
-    for (const block of content) {
-      if (block.type === 'tool_use' && block.id) {
-        const toolName = block.name || '';
-        const status = formatToolStatus(toolName, block.input || {});
-        let subTools = agent.activeSubagentToolIds.get(parentToolId);
-        if (!subTools) {
-          subTools = new Set();
-          agent.activeSubagentToolIds.set(parentToolId, subTools);
-        }
-        subTools.add(block.id);
-        let subNames = agent.activeSubagentToolNames.get(parentToolId);
-        if (!subNames) {
-          subNames = new Map();
-          agent.activeSubagentToolNames.set(parentToolId, subNames);
-        }
-        subNames.set(block.id, toolName);
-        if (!PERMISSION_EXEMPT_TOOLS.has(toolName)) hasNonExemptSubTool = true;
-        send({ type: 'subagentToolStart', id: agentId, parentToolId, toolId: block.id, status });
-      }
-    }
-    if (hasNonExemptSubTool) startPermissionTimer(agentId);
-  } else if (msgType === 'user') {
-    for (const block of content) {
-      if (block.type === 'tool_result' && block.tool_use_id) {
-        const subTools = agent.activeSubagentToolIds.get(parentToolId);
-        if (subTools) subTools.delete(block.tool_use_id);
-        const subNames = agent.activeSubagentToolNames.get(parentToolId);
-        if (subNames) subNames.delete(block.tool_use_id);
-        const toolId = block.tool_use_id;
-        setTimeout(() => {
-          send({ type: 'subagentToolDone', id: agentId, parentToolId, toolId });
-        }, 300);
-      }
-    }
-    let stillHasNonExempt = false;
-    for (const [, subNames] of agent.activeSubagentToolNames) {
-      for (const [, toolName] of subNames) {
-        if (!PERMISSION_EXEMPT_TOOLS.has(toolName)) {
-          stillHasNonExempt = true;
-          break;
-        }
-      }
-      if (stillHasNonExempt) break;
-    }
-    if (stillHasNonExempt) startPermissionTimer(agentId);
-  }
-}
-
-// ── File Watching ────────────────────────────────────────────
-function readNewLines(agentId: number): void {
-  const agent = agents.get(agentId);
-  if (!agent) return;
-  try {
-    const stat = fs.statSync(agent.jsonlFile);
-    if (stat.size <= agent.fileOffset) return;
-
-    const buf = Buffer.alloc(stat.size - agent.fileOffset);
-    const fd = fs.openSync(agent.jsonlFile, 'r');
-    fs.readSync(fd, buf, 0, buf.length, agent.fileOffset);
-    fs.closeSync(fd);
-    agent.fileOffset = stat.size;
-
-    const text = agent.lineBuffer + buf.toString('utf-8');
-    const lines = text.split('\n');
-    agent.lineBuffer = lines.pop() || '';
-
-    const hasLines = lines.some((l) => l.trim());
-    if (hasLines) {
-      cancelWaitingTimer(agentId);
-      cancelPermissionTimer(agentId);
-      if (agent.permissionSent) {
-        agent.permissionSent = false;
-        send({ type: 'agentToolPermissionClear', id: agentId });
-      }
-    }
-
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      processTranscriptLine(agentId, line);
-    }
-  } catch {
-    // File may have been removed
-  }
-}
-
-function startFileWatching(agentId: number, filePath: string): void {
-  try {
-    const watcher = fs.watch(filePath, () => readNewLines(agentId));
-    fileWatchers.set(agentId, watcher);
-  } catch {
-    // fs.watch may fail
-  }
-
-  try {
-    fs.watchFile(filePath, { interval: POLL_INTERVAL_MS }, () => readNewLines(agentId));
-  } catch {
-    // watchFile may fail
-  }
-
-  const interval = setInterval(() => {
-    if (!agents.has(agentId)) {
-      clearInterval(interval);
-      try {
-        fs.unwatchFile(filePath);
-      } catch {
-        /* ignore */
-      }
-      return;
-    }
-    readNewLines(agentId);
-  }, POLL_INTERVAL_MS);
-  pollingTimers.set(agentId, interval);
-}
-
-function removeAgent(agentId: number): void {
-  const agent = agents.get(agentId);
-  if (!agent) return;
-
-  fileWatchers.get(agentId)?.close();
-  fileWatchers.delete(agentId);
-  const pt = pollingTimers.get(agentId);
-  if (pt) clearInterval(pt);
-  pollingTimers.delete(agentId);
-  try {
-    fs.unwatchFile(agent.jsonlFile);
-  } catch {
-    /* ignore */
-  }
-  cancelWaitingTimer(agentId);
-  cancelPermissionTimer(agentId);
-  agents.delete(agentId);
 }
 
 // ── Session Auto-Detection ───────────────────────────────────
@@ -756,258 +315,313 @@ function scanForSessions(): void {
 
 function createAgentForFile(jsonlFile: string, projectDir: string): void {
   const id = nextAgentId++;
-  const agent: AgentState = {
-    id,
-    projectDir,
-    jsonlFile,
-    fileOffset: 0,
-    lineBuffer: '',
-    activeToolIds: new Set(),
-    activeToolStatuses: new Map(),
-    activeToolNames: new Map(),
-    activeSubagentToolIds: new Map(),
-    activeSubagentToolNames: new Map(),
-    isWaiting: false,
-    permissionSent: false,
-    hadToolsInTurn: false,
-  };
+  const agent: AgentState = createCoreAgentState(id, projectDir, jsonlFile);
 
   // Skip to near end of file — only show recent activity
   try {
     const stat = fs.statSync(jsonlFile);
-    // Read last 4KB to catch recent state
-    const readBack = Math.min(stat.size, 4096);
-    agent.fileOffset = stat.size - readBack;
+    agent.fileOffset = Math.max(0, stat.size - SESSION_TAIL_BYTES);
   } catch {
     // Start from beginning if stat fails
   }
 
   // Extract workspace cwd from JSONL file
   agent.cwd = extractCwdFromJsonl(jsonlFile);
+  agent.sessionId = path.basename(jsonlFile, '.jsonl');
 
   // Link to PTY if this is a session we spawned
-  const sessionId = path.basename(jsonlFile, '.jsonl');
-  const linkedPtyId = ptySessionIds.get(sessionId);
+  const linkedPtyId = ptySessionIds.get(agent.sessionId);
   if (linkedPtyId) {
     agent.ptyId = linkedPtyId;
-    agent.sessionId = sessionId;
     agentToPty.set(id, linkedPtyId);
     ptyToAgent.set(linkedPtyId, id);
   }
 
-  agents.set(id, agent);
-  console.log(`Agent ${id}: tracking ${path.basename(jsonlFile)} in ${agent.cwd || path.basename(projectDir)}`);
-  send({ type: 'agentCreated', id, ptyId: linkedPtyId });
+  ctx.agents.set(id, agent);
+  console.log(
+    `Agent ${id}: tracking ${path.basename(jsonlFile)} in ${agent.cwd || path.basename(projectDir)}`,
+  );
+  const folderName = agent.cwd ? path.basename(agent.cwd) : undefined;
+  ctx.send({ type: 'agentCreated', id, ptyId: linkedPtyId, folderName });
 
-  startFileWatching(id, jsonlFile);
-  readNewLines(id);
+  startFileWatching(ctx, id, jsonlFile);
+  readNewLines(ctx, id);
 }
 
-// ── IPC Handlers ─────────────────────────────────────────────
-function setupPtyHandlers(): void {
-  ipcMain.handle('pty-spawn', (_event, opts: { id: string; cmd: string; args: string[]; cwd: string }) => {
-    const shell = opts.cmd || (process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL || '/bin/zsh');
-    const proc = pty.spawn(shell, opts.args || [], {
-      name: 'xterm-256color',
-      cols: 80,
-      rows: 24,
-      cwd: opts.cwd || os.homedir(),
-      env: { ...process.env, TERM: 'xterm-256color' } as Record<string, string>,
-    });
+function removeAgent(agentId: number): void {
+  const agent = ctx.agents.get(agentId);
+  if (!agent) return;
 
-    ptyProcesses.set(opts.id, proc);
+  ctx.fileWatchers.get(agentId)?.close();
+  ctx.fileWatchers.delete(agentId);
+  const pt = ctx.pollingTimers.get(agentId);
+  if (pt) clearInterval(pt);
+  ctx.pollingTimers.delete(agentId);
+  try {
+    fs.unwatchFile(agent.jsonlFile);
+  } catch {
+    /* ignore */
+  }
+  const wt = ctx.waitingTimers.get(agentId);
+  if (wt) clearTimeout(wt);
+  ctx.waitingTimers.delete(agentId);
+  const permT = ctx.permissionTimers.get(agentId);
+  if (permT) clearTimeout(permT);
+  ctx.permissionTimers.delete(agentId);
+  ctx.agents.delete(agentId);
+}
 
-    proc.onData((data) => {
-      send({ type: 'pty-output', ptyId: opts.id, data });
-    });
+// ── Renderer message handling ────────────────────────────────
+function isTrustedSender(event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean {
+  return mainWindow !== null && event.sender === mainWindow.webContents;
+}
 
-    proc.onExit(({ exitCode }) => {
-      send({ type: 'pty-exit', ptyId: opts.id, exitCode });
-      ptyProcesses.delete(opts.id);
-      const agentId = ptyToAgent.get(opts.id);
-      if (agentId !== undefined) {
-        agentToPty.delete(agentId);
-        ptyToAgent.delete(opts.id);
-      }
-    });
-
-    return { pid: proc.pid };
+function setupIpcHandlers(): void {
+  // PTY I/O — keystrokes and geometry only; commands are built in main.
+  ipcMain.on('pty-input', (event, opts: { id: string; data: string }) => {
+    if (!isTrustedSender(event)) return;
+    ptys.get(opts.id)?.proc.write(opts.data);
   });
 
-  ipcMain.on('pty-input', (_event, opts: { id: string; data: string }) => {
-    ptyProcesses.get(opts.id)?.write(opts.data);
-  });
-
-  ipcMain.on('pty-resize', (_event, opts: { id: string; cols: number; rows: number }) => {
+  ipcMain.on('pty-resize', (event, opts: { id: string; cols: number; rows: number }) => {
+    if (!isTrustedSender(event)) return;
     try {
-      ptyProcesses.get(opts.id)?.resize(opts.cols, opts.rows);
+      ptys.get(opts.id)?.proc.resize(opts.cols, opts.rows);
     } catch {
       // Resize can fail if process already exited
     }
   });
 
-  ipcMain.on('pty-kill', (_event, opts: { id: string }) => {
-    ptyProcesses.get(opts.id)?.kill();
+  ipcMain.on('pty-kill', (event, opts: { id: string }) => {
+    if (!isTrustedSender(event)) return;
+    killPty(opts.id);
+  });
+
+  // A terminal tab's xterm instance mounted — replay its scrollback so
+  // output produced before mount (or before a renderer reload) is shown.
+  ipcMain.on('pty-ready', (event, opts: { id: string }) => {
+    if (!isTrustedSender(event)) return;
+    const record = ptys.get(opts.id);
+    if (record) {
+      ctx.send({ type: 'pty-replay', ptyId: opts.id, data: record.scrollback });
+    }
+  });
+
+  ipcMain.on('webview-message', (event, msg) => {
+    if (!isTrustedSender(event)) return;
+    handleWebviewMessage(msg as Record<string, unknown>);
   });
 }
 
-function setupIpcHandlers(): void {
-  setupPtyHandlers();
-
-  ipcMain.on('webview-message', (_event, msg) => {
-    if (msg.type === 'webviewReady') {
-      const assetsRoot = getAssetsRoot();
-
-      // Send existing agents
-      const agentIds = [...agents.keys()].sort((a, b) => a - b);
-      send({ type: 'existingAgents', agents: agentIds, agentMeta: {}, folderNames: {} });
-
-      // Load and send assets
-      loadCharacterSprites(assetsRoot);
-      loadFloorTiles(assetsRoot);
-      loadWallTiles(assetsRoot);
-      loadFurnitureAssets(assetsRoot);
-
-      // Send layout
-      const layout = readLayout() || loadDefaultLayout(assetsRoot);
-      if (layout && !readLayout()) writeLayout(layout);
-      send({ type: 'layoutLoaded', layout });
-
-      // Send settings
-      send({ type: 'settingsLoaded', soundEnabled: true });
-
-      // Re-send current agent statuses
-      for (const [agentId, agent] of agents) {
-        for (const [toolId, status] of agent.activeToolStatuses) {
-          send({ type: 'agentToolStart', id: agentId, toolId, status });
-        }
-        if (agent.isWaiting) {
-          send({ type: 'agentStatus', id: agentId, status: 'waiting' });
-        }
-      }
-    } else if (msg.type === 'openClaude') {
-      const sessionId = crypto.randomUUID();
-      const ptyId = crypto.randomUUID();
-      const cwd = (msg.folderPath as string) || os.homedir();
-      ptySessionIds.set(sessionId, ptyId);
-      send({ type: 'pty-created', ptyId, sessionId, cwd });
-    } else if (msg.type === 'saveLayout') {
-      writeLayout(msg.layout);
-    } else if (msg.type === 'saveAgentSeats') {
-      // Store in a local file
-      try {
-        const seatsFile = path.join(LAYOUT_DIR, 'agent-seats.json');
-        if (!fs.existsSync(LAYOUT_DIR)) fs.mkdirSync(LAYOUT_DIR, { recursive: true });
-        fs.writeFileSync(seatsFile, JSON.stringify(msg.seats, null, 2), 'utf-8');
-      } catch {
-        /* ignore */
-      }
-    } else if (msg.type === 'setSoundEnabled') {
-      // Could persist to settings file if desired
-    } else if (msg.type === 'closeAgent') {
-      const id = msg.id as number;
-      const agent = agents.get(id);
-      // Remember this session so it doesn't reappear on restart
-      if (agent) {
-        dismissedJsonlFiles.add(agent.jsonlFile);
-        saveDismissedSessions();
-      }
-      // Kill associated PTY and close its terminal tab
-      const ptyId = agentToPty.get(id);
-      if (ptyId) {
-        send({ type: 'pty-close-tab', ptyId });
-        ptyProcesses.get(ptyId)?.kill();
-        ptyProcesses.delete(ptyId);
-        agentToPty.delete(id);
-        ptyToAgent.delete(ptyId);
-      }
-      removeAgent(id);
-      send({ type: 'agentClosed', id });
-    } else if (msg.type === 'focusAgent') {
-      const id = msg.id as number;
-      let ptyId = agentToPty.get(id);
-
-      if (!ptyId) {
-        // Agent has no terminal yet — create one
-        const agent = agents.get(id);
-        if (agent) {
-          ptyId = crypto.randomUUID();
-          const sessionId = path.basename(agent.jsonlFile, '.jsonl');
-          const cwd = agent.cwd || os.homedir();
-
-          agent.ptyId = ptyId;
-          agent.sessionId = sessionId;
-          agentToPty.set(id, ptyId);
-          ptyToAgent.set(ptyId, id);
-          ptySessionIds.set(sessionId, ptyId);
-
-          send({ type: 'pty-created', ptyId, sessionId, cwd, shellOnly: true });
-          return;
-        }
-      }
-
-      if (ptyId) {
-        send({ type: 'pty-focus', ptyId, agentId: id });
-      }
-    } else if (msg.type === 'openSessionsFolder') {
-      if (fs.existsSync(CLAUDE_PROJECTS_DIR)) {
-        shell.openPath(CLAUDE_PROJECTS_DIR);
-      }
-    } else if (msg.type === 'exportLayout') {
-      const layout = readLayout();
-      if (!layout) return;
-      dialog
-        .showSaveDialog(mainWindow!, {
-          filters: [{ name: 'JSON Files', extensions: ['json'] }],
-          defaultPath: path.join(os.homedir(), 'pixel-agents-layout.json'),
-        })
-        .then((result) => {
-          if (result.filePath) {
-            fs.writeFileSync(result.filePath, JSON.stringify(layout, null, 2), 'utf-8');
-          }
-        });
-    } else if (msg.type === 'importLayout') {
-      dialog
-        .showOpenDialog(mainWindow!, {
-          filters: [{ name: 'JSON Files', extensions: ['json'] }],
-          properties: ['openFile'],
-        })
-        .then((result) => {
-          if (result.filePaths.length > 0) {
-            try {
-              const raw = fs.readFileSync(result.filePaths[0], 'utf-8');
-              const imported = JSON.parse(raw);
-              if (imported.version !== 1 || !Array.isArray(imported.tiles)) return;
-              writeLayout(imported);
-              send({ type: 'layoutLoaded', layout: imported });
-            } catch {
-              /* ignore */
-            }
-          }
-        });
+function handleWebviewMessage(msg: Record<string, unknown>): void {
+  if (msg.type === 'webviewReady') {
+    onWebviewReady();
+  } else if (msg.type === 'openClaude') {
+    const sessionId = crypto.randomUUID();
+    const cwd = (msg.folderPath as string) || os.homedir();
+    const label = `Agent ${nextTerminalIndex++}`;
+    const ptyId = spawnPty({
+      cwd,
+      command: `claude --session-id ${sessionId}`,
+      sessionId,
+      label,
+    });
+    ctx.send({ type: 'pty-created', ptyId, label });
+  } else if (msg.type === 'saveLayout') {
+    if (isValidLayout(msg.layout)) {
+      layoutWatcher?.markOwnWrite();
+      writeLayoutToFile(msg.layout);
     }
+  } else if (msg.type === 'saveAgentSeats') {
+    saveAgentSeats(msg.seats as Record<string, AgentSeatMeta> | undefined);
+  } else if (msg.type === 'setSoundEnabled') {
+    saveJsonFile(SETTINGS_FILE, { soundEnabled: !!msg.enabled });
+  } else if (msg.type === 'closeAgent') {
+    const id = msg.id as number;
+    const agent = ctx.agents.get(id);
+    // Remember this session so it doesn't reappear on restart
+    if (agent) {
+      dismissedJsonlFiles.add(agent.jsonlFile);
+      saveDismissedSessions();
+    }
+    // Kill associated PTY and close its terminal tab
+    const ptyId = agentToPty.get(id);
+    if (ptyId) {
+      ctx.send({ type: 'pty-close-tab', ptyId });
+      killPty(ptyId);
+    }
+    removeAgent(id);
+    ctx.send({ type: 'agentClosed', id });
+  } else if (msg.type === 'focusAgent') {
+    focusAgent(msg.id as number);
+  } else if (msg.type === 'openSessionsFolder') {
+    if (fs.existsSync(CLAUDE_PROJECTS_DIR)) {
+      shell.openPath(CLAUDE_PROJECTS_DIR);
+    }
+  } else if (msg.type === 'exportLayout') {
+    void exportLayout();
+  } else if (msg.type === 'importLayout') {
+    void importLayout();
+  }
+}
+
+function onWebviewReady(): void {
+  const assetsRoot = getAssetsRoot();
+
+  // Rebuild terminal tabs for PTYs that survived a renderer reload; each
+  // tab's TerminalInstance requests a scrollback replay via 'pty-ready'.
+  for (const [ptyId, record] of ptys) {
+    ctx.send({ type: 'pty-created', ptyId, label: record.label });
+  }
+
+  // Send existing agents with session-keyed seat/palette metadata
+  const agentIds = [...ctx.agents.keys()].sort((a, b) => a - b);
+  const metaBySession = loadSeatMetaBySession();
+  const agentMeta: Record<number, AgentSeatMeta> = {};
+  const folderNames: Record<number, string> = {};
+  for (const [id, agent] of ctx.agents) {
+    if (agent.sessionId && metaBySession[agent.sessionId]) {
+      agentMeta[id] = metaBySession[agent.sessionId];
+    }
+    if (agent.cwd) {
+      folderNames[id] = path.basename(agent.cwd);
+    }
+  }
+  ctx.send({ type: 'existingAgents', agents: agentIds, agentMeta, folderNames });
+
+  // Load and send assets (fire-and-forget; loaders log their own errors)
+  void (async () => {
+    const charSprites = await loadCharacterSprites(assetsRoot);
+    if (charSprites) sendCharacterSprites(ctx.send, charSprites);
+    const floorTiles = await loadFloorTiles(assetsRoot);
+    if (floorTiles) sendFloorTiles(ctx.send, floorTiles);
+    const wallTiles = await loadWallTiles(assetsRoot);
+    if (wallTiles) sendWallTiles(ctx.send, wallTiles);
+    const assets = await loadFurnitureAssets(assetsRoot);
+    if (assets) sendAssets(ctx.send, assets);
+
+    // Send layout AFTER assets (webview buffers agents until layoutLoaded)
+    let layout = readLayoutFromFile();
+    if (!layout) {
+      layout = loadDefaultLayout(assetsRoot);
+      if (layout) writeLayoutToFile(layout);
+    }
+    ctx.send({ type: 'layoutLoaded', layout });
+  })();
+
+  // Send settings
+  ctx.send({ type: 'settingsLoaded', soundEnabled: loadSettings().soundEnabled });
+
+  // Re-send current agent statuses
+  for (const [agentId, agent] of ctx.agents) {
+    for (const [toolId, status] of agent.activeToolStatuses) {
+      ctx.send({ type: 'agentToolStart', id: agentId, toolId, status });
+    }
+    if (agent.isWaiting) {
+      ctx.send({ type: 'agentStatus', id: agentId, status: 'waiting' });
+    }
+  }
+}
+
+function saveAgentSeats(seatsById: Record<string, AgentSeatMeta> | undefined): void {
+  if (!seatsById) return;
+  // Re-key by session id so the metadata survives restarts (agent ids don't)
+  const bySession = loadSeatMetaBySession();
+  for (const [idStr, meta] of Object.entries(seatsById)) {
+    const agent = ctx.agents.get(Number(idStr));
+    if (agent?.sessionId) {
+      bySession[agent.sessionId] = meta;
+    }
+  }
+  saveJsonFile(AGENT_SEATS_FILE, { bySession });
+}
+
+function focusAgent(id: number): void {
+  let ptyId = agentToPty.get(id);
+
+  if (!ptyId) {
+    // Agent adopted from an external session — open a plain shell in its
+    // workspace (resuming the session here could conflict with the external
+    // claude process that owns it).
+    const agent = ctx.agents.get(id);
+    if (!agent) return;
+    const label = agent.cwd ? `Shell: ${path.basename(agent.cwd)}` : `Agent ${nextTerminalIndex++}`;
+    ptyId = spawnPty({ cwd: agent.cwd, label });
+    agent.ptyId = ptyId;
+    agentToPty.set(id, ptyId);
+    ptyToAgent.set(ptyId, id);
+    ctx.send({ type: 'pty-created', ptyId, label });
+    return;
+  }
+
+  ctx.send({ type: 'pty-focus', ptyId, agentId: id });
+}
+
+async function exportLayout(): Promise<void> {
+  if (!mainWindow) return;
+  const layout = readLayoutFromFile();
+  if (!layout) return;
+  const result = await dialog.showSaveDialog(mainWindow, {
+    filters: [{ name: 'JSON Files', extensions: ['json'] }],
+    defaultPath: path.join(os.homedir(), 'pixel-agents-layout.json'),
   });
+  if (result.filePath) {
+    try {
+      fs.writeFileSync(result.filePath, JSON.stringify(layout, null, 2), 'utf-8');
+    } catch (err) {
+      console.error('[Pixel Agents] Failed to export layout:', err);
+    }
+  }
+}
+
+async function importLayout(): Promise<void> {
+  if (!mainWindow) return;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    filters: [{ name: 'JSON Files', extensions: ['json'] }],
+    properties: ['openFile'],
+  });
+  if (result.filePaths.length === 0) return;
+  try {
+    const raw = fs.readFileSync(result.filePaths[0], 'utf-8');
+    const imported = JSON.parse(raw) as Record<string, unknown>;
+    if (!isValidLayout(imported)) return;
+    layoutWatcher?.markOwnWrite();
+    writeLayoutToFile(imported);
+    ctx.send({ type: 'layoutLoaded', layout: imported });
+  } catch (err) {
+    console.error('[Pixel Agents] Failed to import layout:', err);
+  }
 }
 
 // ── Window Creation ──────────────────────────────────────────
 function createWindow(): void {
   mainWindow = new BrowserWindow({
-    width: 900,
-    height: 700,
+    width: WINDOW_WIDTH,
+    height: WINDOW_HEIGHT,
     title: 'Pixel Agents',
-    backgroundColor: '#1e1e2e',
+    backgroundColor: WINDOW_BACKGROUND,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
     },
   });
+
+  // The app only ever shows local content — block navigation and new windows.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const devServer = process.env.VITE_DEV_SERVER_URL;
+    if (!(devServer && url.startsWith(devServer)) && !url.startsWith('file://')) {
+      event.preventDefault();
+    }
+  });
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   // In development, load from Vite dev server; in production, load built files
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
-    mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'webview', 'index.html'));
+    mainWindow.loadFile(path.join(__dirname, '..', '..', 'dist', 'webview', 'index.html'));
   }
 
   mainWindow.on('closed', () => {
@@ -1019,14 +633,15 @@ function createWindow(): void {
 function cleanupAndQuit(): void {
   if (scanTimer) clearInterval(scanTimer);
   scanTimer = null;
-  for (const id of [...agents.keys()]) removeAgent(id);
-  for (const [, proc] of ptyProcesses) {
-    try { proc.kill(); } catch { /* ignore */ }
-  }
-  ptyProcesses.clear();
+  layoutWatcher?.dispose();
+  layoutWatcher = null;
+  for (const id of [...ctx.agents.keys()]) removeAgent(id);
+  for (const ptyId of [...ptys.keys()]) killPty(ptyId);
+  ptys.clear();
 }
 
 app.whenReady().then(() => {
+  fixPathEnv();
   setupIpcHandlers();
 
   // Clean up stale dismissed sessions on startup
@@ -1036,7 +651,12 @@ app.whenReady().then(() => {
   scanForSessions();
 
   // Periodic scan for new sessions
-  scanTimer = setInterval(scanForSessions, SCAN_INTERVAL_MS);
+  scanTimer = setInterval(scanForSessions, SESSION_SCAN_INTERVAL_MS);
+
+  // Cross-window layout sync (e.g. edits made from a VS Code window)
+  layoutWatcher = watchLayoutFile((layout) => {
+    ctx.send({ type: 'layoutLoaded', layout });
+  });
 
   createWindow();
 
@@ -1046,8 +666,11 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  cleanupAndQuit();
-  if (process.platform !== 'darwin') app.quit();
+  // On macOS the app keeps running (dock icon) — agents, PTYs, and the
+  // session scan must survive so reopening the window restores everything.
+  if (process.platform !== 'darwin') {
+    app.quit();
+  }
 });
 
 app.on('before-quit', () => {

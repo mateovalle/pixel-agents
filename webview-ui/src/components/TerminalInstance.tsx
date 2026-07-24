@@ -9,6 +9,9 @@ interface TerminalInstanceProps {
   visible: boolean;
 }
 
+const FIT_DELAY_MS = 50;
+const RESIZE_DEBOUNCE_MS = 100;
+
 export function TerminalInstance({ ptyId, visible }: TerminalInstanceProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -56,7 +59,13 @@ export function TerminalInstance({ ptyId, visible }: TerminalInstanceProps) {
     fitRef.current = fitAddon;
 
     // Fit after a brief delay to let layout settle
-    setTimeout(() => fitAddon.fit(), 50);
+    const fitTimer = setTimeout(() => {
+      try {
+        fitAddon.fit();
+      } catch {
+        // Terminal may not be visible yet
+      }
+    }, FIT_DELAY_MS);
 
     // Forward user input to PTY
     term.onData((data) => {
@@ -68,16 +77,29 @@ export function TerminalInstance({ ptyId, visible }: TerminalInstanceProps) {
       api?.ptyResize?.(ptyId, cols, rows);
     });
 
-    // Listen for PTY output
+    // Output produced before this instance mounted (spawn burst, renderer
+    // reload) lives in the main process scrollback. Ignore the live stream
+    // until the replay arrives — it includes everything sent so far, and IPC
+    // ordering guarantees no gap between replay and subsequent output.
+    let replayed = false;
     const handler = (e: MessageEvent) => {
       const msg = e.data;
-      if (msg.type === 'pty-output' && msg.ptyId === ptyId) {
-        term.write(msg.data);
-      } else if (msg.type === 'pty-exit' && msg.ptyId === ptyId) {
+      if (msg.ptyId !== ptyId) return;
+      if (msg.type === 'pty-replay') {
+        if (!replayed) {
+          replayed = true;
+          term.write(msg.data);
+        }
+      } else if (msg.type === 'pty-output') {
+        if (replayed) {
+          term.write(msg.data);
+        }
+      } else if (msg.type === 'pty-exit') {
         term.write(`\r\n\x1b[90m[Process exited with code ${msg.exitCode}]\x1b[0m\r\n`);
       }
     };
     window.addEventListener('message', handler);
+    api?.ptyReady?.(ptyId);
 
     // ResizeObserver for container
     const observer = new ResizeObserver(() => {
@@ -88,13 +110,14 @@ export function TerminalInstance({ ptyId, visible }: TerminalInstanceProps) {
         } catch {
           // Terminal may not be visible
         }
-      }, 100);
+      }, RESIZE_DEBOUNCE_MS);
     });
     observer.observe(container);
 
     return () => {
       window.removeEventListener('message', handler);
       observer.disconnect();
+      clearTimeout(fitTimer);
       if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current);
       term.dispose();
     };
@@ -102,15 +125,15 @@ export function TerminalInstance({ ptyId, visible }: TerminalInstanceProps) {
 
   // Re-fit when visibility changes
   useEffect(() => {
-    if (visible && fitRef.current) {
-      setTimeout(() => {
-        try {
-          fitRef.current?.fit();
-        } catch {
-          // ignore
-        }
-      }, 50);
-    }
+    if (!visible || !fitRef.current) return;
+    const timer = setTimeout(() => {
+      try {
+        fitRef.current?.fit();
+      } catch {
+        // ignore
+      }
+    }, FIT_DELAY_MS);
+    return () => clearTimeout(timer);
   }, [visible]);
 
   return (
