@@ -14,5 +14,6 @@
     "declaration": false,
     "sourceMap": true
   },
-  "include": ["./*.ts", "../src/core/**/*", "../shared/**/*"]
+  "include": ["./*.ts", "../src/core/**/*", "../shared/**/*"],
+  "exclude": ["../src/core/__tests__"]
 }

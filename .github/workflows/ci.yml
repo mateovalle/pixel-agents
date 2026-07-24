@@ -28,6 +28,8 @@ jobs:
         run: npm run lint
       - name: Lint (webview)
         run: npm run lint:webview
+      - name: Test (core)
+        run: npm test
       - name: Build webview
         run: npm run build:webview
       - name: Build electron main

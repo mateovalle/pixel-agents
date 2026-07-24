@@ -13,6 +13,8 @@
     "build": "npm run check && npm run build:electron && npm run build:webview",
     "start": "npm run build && npx electron dist-electron/electron/main.js",
     "check": "npm run check-types && npm run lint",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "check-types": "npm run check-types:src && npm run check-types:electron && npm run check-types:webview",
     "check-types:src": "tsc --noEmit",
     "check-types:electron": "tsc --noEmit -p electron",
@@ -71,6 +73,7 @@
     "prettier": "^3.8.1",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.54.0",
+    "vitest": "^4.1.10",
     "wait-on": "^9.1.0"
   },
   "dependencies": {
