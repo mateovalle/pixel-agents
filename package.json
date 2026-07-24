@@ -16,7 +16,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check-types": "npm run check-types:src && npm run check-types:electron && npm run check-types:webview",
-    "check-types:src": "tsc --noEmit",
+    "check-types:src": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "check-types:electron": "tsc --noEmit -p electron",
     "check-types:webview": "cd webview-ui && npx tsc -b",
     "lint": "eslint src electron",

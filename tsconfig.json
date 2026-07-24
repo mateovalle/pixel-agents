@@ -17,6 +17,7 @@
 		"webview-ui",
 		"dist",
 		"out",
-		"scripts"
+		"scripts",
+		"**/__tests__"
 	]
 }
