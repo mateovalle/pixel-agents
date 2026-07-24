@@ -41,6 +41,7 @@ import {
   type TrackerContext,
 } from '../src/core/types.js';
 import { type ChatSession, startChatSession } from './chatAgent.js';
+import { recordTurnUsage, summarizeUsage } from './usage.js';
 
 // ── Electron-specific constants ──────────────────────────────
 const PTY_SCROLLBACK_MAX_CHARS = 200_000;
@@ -314,6 +315,9 @@ function launchChatAgent(cwd: string): void {
     cwd,
     label,
     send: ctx.send,
+    onTurnComplete: (costUsd, durationMs) => {
+      recordTurnUsage(cwd, costUsd, durationMs);
+    },
     onExit: () => {
       // The SDK loop ended on its own (error or shutdown) — retire the
       // character but leave the tab so any error output stays readable.
@@ -604,6 +608,8 @@ function handleWebviewMessage(msg: WebviewToHostMessage): void {
     } else if (agent?.ptyId) {
       ctx.send({ type: 'pty-focus', ptyId: agent.ptyId, agentId: msg.id });
     }
+  } else if (msg.type === 'getUsageSummary') {
+    ctx.send({ type: 'usageSummary', summary: summarizeUsage() });
   } else if (msg.type === 'openSessionsFolder') {
     if (fs.existsSync(CLAUDE_PROJECTS_DIR)) {
       shell.openPath(CLAUDE_PROJECTS_DIR);

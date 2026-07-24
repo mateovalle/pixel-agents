@@ -72,6 +72,26 @@ export type ChatEvent =
   | { kind: 'status'; text: string }
   | { kind: 'error'; message: string };
 
+// ── Usage tracking (Electron only) ───────────────────────────
+
+export interface ProjectUsage {
+  /** Absolute project path. */
+  path: string;
+  /** basename(path) for display. */
+  folder: string;
+  monthUsd: number;
+  allTimeUsd: number;
+}
+
+export interface UsageSummary {
+  todayUsd: number;
+  monthUsd: number;
+  allTimeUsd: number;
+  /** Sorted by monthUsd desc; capped by the host. */
+  perProject: ProjectUsage[];
+  turnCount: number;
+}
+
 // ── Host → Webview ───────────────────────────────────────────
 
 export type HostToWebviewMessage =
@@ -143,7 +163,9 @@ export type HostToWebviewMessage =
       input: Record<string, unknown>;
     }
   /** The request was resolved elsewhere (abort/turn end) — remove the card. */
-  | { type: 'chat-permission-resolved'; agentId: number; requestId: string };
+  | { type: 'chat-permission-resolved'; agentId: number; requestId: string }
+  // Usage
+  | { type: 'usageSummary'; summary: UsageSummary };
 
 // ── Webview → Host ───────────────────────────────────────────
 
@@ -174,4 +196,6 @@ export type WebviewToHostMessage =
   | { type: 'setSoundEnabled'; enabled: boolean }
   | { type: 'openSessionsFolder' }
   | { type: 'exportLayout' }
-  | { type: 'importLayout' };
+  | { type: 'importLayout' }
+  /** Request an up-to-date UsageSummary (host replies with 'usageSummary'). */
+  | { type: 'getUsageSummary' };

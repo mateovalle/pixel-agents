@@ -97,6 +97,8 @@ export function startChatSession(opts: {
   label: string;
   send: Send;
   onExit: () => void;
+  /** Called once per completed turn with the SDK's exact cost/duration. */
+  onTurnComplete?: (costUsd: number, durationMs: number) => void;
 }): ChatSession {
   const { agentId, sessionId, cwd, send } = opts;
   const input = createInputStream();
@@ -234,10 +236,13 @@ export function startChatSession(opts: {
       }
     } else if (msg.type === 'result') {
       setBusy(false);
+      const costUsd = msg.total_cost_usd ?? 0;
+      const durationMs = msg.duration_ms ?? 0;
+      opts.onTurnComplete?.(costUsd, durationMs);
       emit({
         kind: 'turn-complete',
-        costUsd: msg.total_cost_usd ?? 0,
-        durationMs: msg.duration_ms ?? 0,
+        costUsd,
+        durationMs,
         isError: msg.is_error,
       });
     } else if (msg.type === 'system' && msg.subtype === 'compact_boundary') {
