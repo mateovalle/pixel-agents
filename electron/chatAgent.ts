@@ -18,11 +18,12 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk' with { 'resolution-mode': 'import' };
 import * as path from 'path';
 
-import type { ChatEvent, ChatPermissionMode } from '../shared/protocol.js';
+import type { ChatEvent, ChatImageAttachment, ChatPermissionMode } from '../shared/protocol.js';
 import type { Send } from '../src/core/types.js';
 
 const CHAT_HISTORY_MAX_EVENTS = 2000;
 const TOOL_SUMMARY_MAX_CHARS = 1500;
+const SUPPORTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 
 type SdkModule = typeof import('@anthropic-ai/claude-agent-sdk', {
   with: { 'resolution-mode': 'import' },
@@ -85,7 +86,7 @@ export interface ChatSession {
   /** Last time the user sent a prompt — used for /clear attribution. */
   lastInputAt: number;
   mode: ChatPermissionMode;
-  send(text: string): void;
+  send(text: string, images?: ChatImageAttachment[]): void;
   interrupt(): void;
   setMode(mode: ChatPermissionMode): void;
   respondPermission(requestId: string, allow: boolean, message?: string): void;
@@ -120,14 +121,33 @@ export function startChatSession(opts: {
     lastInputAt: Date.now(),
     mode: 'default',
 
-    send(text: string): void {
+    send(text: string, images?: ChatImageAttachment[]): void {
       if (disposed) return;
       session.lastInputAt = Date.now();
-      emit({ kind: 'user-text', text });
+      const validImages = (images ?? []).filter((img) => SUPPORTED_IMAGE_TYPES.has(img.mediaType));
+      emit({
+        kind: 'user-text',
+        text,
+        ...(validImages.length > 0 ? { imageCount: validImages.length } : {}),
+      });
       setBusy(true);
       input.push({
         type: 'user',
-        message: { role: 'user', content: [{ type: 'text', text }] },
+        message: {
+          role: 'user',
+          content: [
+            ...validImages.map((img) => ({
+              type: 'image' as const,
+              source: {
+                type: 'base64' as const,
+                media_type: img.mediaType as
+                  'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp',
+                data: img.data,
+              },
+            })),
+            { type: 'text', text },
+          ],
+        },
         parent_tool_use_id: null,
         session_id: sessionId,
       });

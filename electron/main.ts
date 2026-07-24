@@ -656,7 +656,7 @@ function handleWebviewMessage(msg: WebviewToHostMessage): void {
       if (cwd) launchChatAgent(cwd);
     });
   } else if (msg.type === 'chatSend') {
-    chatSessions.get(msg.id)?.send(msg.text);
+    chatSessions.get(msg.id)?.send(msg.text, msg.images);
   } else if (msg.type === 'chatInterrupt') {
     chatSessions.get(msg.id)?.interrupt();
   } else if (msg.type === 'chatReady') {

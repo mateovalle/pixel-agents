@@ -60,7 +60,7 @@ export type LayoutData = Record<string, unknown>;
  */
 export type ChatEvent =
   /** Echo of a prompt the user sent (also used for replay after reload). */
-  | { kind: 'user-text'; text: string }
+  | { kind: 'user-text'; text: string; imageCount?: number }
   /** Streaming assistant text (append to the in-progress text block). */
   | { kind: 'text-delta'; text: string }
   /** A completed content block — replaces accumulated deltas for 'text'. */
@@ -71,6 +71,13 @@ export type ChatEvent =
   /** Informational status line (compaction, retries, …). */
   | { kind: 'status'; text: string }
   | { kind: 'error'; message: string };
+
+/** An image attached to a chat prompt (base64, no data: prefix). */
+export interface ChatImageAttachment {
+  /** 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' */
+  mediaType: string;
+  data: string;
+}
 
 /** Permission modes exposed in the chat UI (subset of Claude Code's modes). */
 export type ChatPermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
@@ -191,7 +198,7 @@ export type WebviewToHostMessage =
   | { type: 'openClaude'; folderPath?: string }
   /** Opens a CHAT agent (Agent SDK). No folderPath → host shows a folder picker. */
   | { type: 'openChatAgent'; folderPath?: string }
-  | { type: 'chatSend'; id: number; text: string }
+  | { type: 'chatSend'; id: number; text: string; images?: ChatImageAttachment[] }
   | { type: 'chatInterrupt'; id: number }
   /** ChatView for this agent mounted — host replays its event history. */
   | { type: 'chatReady'; id: number }

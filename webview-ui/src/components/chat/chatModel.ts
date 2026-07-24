@@ -10,7 +10,7 @@ export type ToolCallStatus = 'running' | 'done' | 'error';
  * same event list, used as the React key.
  */
 export type ChatItem =
-  | { kind: 'user'; key: number; text: string }
+  | { kind: 'user'; key: number; text: string; imageCount?: number }
   | { kind: 'assistant'; key: number; text: string; streaming: boolean }
   | { kind: 'thinking'; key: number; text: string }
   | {
@@ -64,7 +64,12 @@ function finalizeStreaming(items: ChatItem[]): ChatItem[] {
 export function applyChatEvent(model: ChatModel, event: ChatEvent): ChatModel {
   switch (event.kind) {
     case 'user-text':
-      return pushItem(model, (key) => ({ kind: 'user', key, text: event.text }));
+      return pushItem(model, (key) => ({
+        kind: 'user',
+        key,
+        text: event.text,
+        imageCount: event.imageCount,
+      }));
 
     case 'text-delta': {
       const idx = findStreamingIndex(model.items);

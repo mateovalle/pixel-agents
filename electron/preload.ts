@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 // Deliberately minimal surface: the renderer can pass messages, keystrokes,
 // and terminal geometry — it can never specify a command to execute.
@@ -15,4 +15,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.send('pty-resize', { id, cols, rows }),
   ptyKill: (id: string) => ipcRenderer.send('pty-kill', { id }),
   ptyReady: (id: string) => ipcRenderer.send('pty-ready', { id }),
+  /** Absolute filesystem path of a dropped/selected File (for @-mentions). */
+  getPathForFile: (file: File): string => {
+    try {
+      return webUtils.getPathForFile(file);
+    } catch {
+      return '';
+    }
+  },
 });

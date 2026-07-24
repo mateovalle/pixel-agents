@@ -2,16 +2,24 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { ChatPermissionMode, HostToWebviewMessage } from '../../../../shared/protocol.js';
 import {
+  CHAT_ACCEPTED_IMAGE_TYPES,
+  CHAT_ATTACH_THUMB_PX,
+  CHAT_ATTACH_WARNING_MS,
   CHAT_BODY_FONT_SIZE_PX,
   CHAT_COMPOSER_LINE_HEIGHT_PX,
   CHAT_COMPOSER_MAX_ROWS,
   CHAT_COST_DECIMALS,
+  CHAT_DROP_OVERLAY_BG,
+  CHAT_DROP_OVERLAY_INSET_PX,
   CHAT_DURATION_DECIMALS,
+  CHAT_MAX_ATTACHMENTS,
+  CHAT_MAX_IMAGE_BYTES,
+  CHAT_MAX_IMAGE_MB,
   CHAT_MODE_MENU_MIN_WIDTH_PX,
   CHAT_MS_PER_SEC,
   CHAT_NEAR_BOTTOM_PX,
 } from '../../constants.js';
-import { vscode } from '../../vscodeApi.js';
+import { getElectronAPI, vscode } from '../../vscodeApi.js';
 import type { ChatItem, ChatModel } from './chatModel.js';
 import { applyChatEvent, applyChatEvents, emptyChatModel } from './chatModel.js';
 import { Markdown } from './Markdown.js';
@@ -22,6 +30,41 @@ import { ToolCard } from './ToolCard.js';
 interface ChatViewProps {
   agentId: number;
   visible: boolean;
+}
+
+/** An image queued in the composer tray, ready to send with the next prompt. */
+interface ChatAttachment {
+  id: string;
+  /** e.g. 'image/png' */
+  mediaType: string;
+  /** Base64 payload WITHOUT the data: prefix. */
+  data: string;
+  /** data: URL for the <img> thumbnail. */
+  previewUrl: string;
+}
+
+/** Read a File as base64 (data: prefix stripped). */
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      const comma = result.indexOf(',');
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('read failed'));
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Quote a filesystem path with '…' if it contains spaces. */
+function quotePath(path: string): string {
+  return path.includes(' ') ? `'${path}'` : path;
+}
+
+/** True when a drag event carries OS files (not e.g. text selections). */
+function dragHasFiles(e: React.DragEvent): boolean {
+  return Array.from(e.dataTransfer.types).includes('Files');
 }
 
 const userBubbleStyle: React.CSSProperties = {
@@ -101,6 +144,80 @@ const newMessagesBtnStyle: React.CSSProperties = {
   padding: '3px 10px',
   fontSize: '18px',
   cursor: 'pointer',
+};
+
+const attachWarningStyle: React.CSSProperties = {
+  padding: '4px 10px',
+  fontSize: CHAT_BODY_FONT_SIZE_PX - 1,
+  color: 'var(--pixel-chat-amber)',
+  background: 'var(--pixel-bg)',
+  borderTop: '2px solid var(--pixel-border)',
+};
+
+const attachTrayStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+  padding: '8px 10px',
+  background: 'var(--pixel-bg)',
+  borderTop: '2px solid var(--pixel-border)',
+};
+
+const attachThumbWrapStyle: React.CSSProperties = {
+  position: 'relative',
+  width: CHAT_ATTACH_THUMB_PX,
+  height: CHAT_ATTACH_THUMB_PX,
+  flexShrink: 0,
+};
+
+const attachThumbImgStyle: React.CSSProperties = {
+  width: '100%',
+  height: '100%',
+  objectFit: 'cover',
+  display: 'block',
+  boxSizing: 'border-box',
+  border: '2px solid var(--pixel-border)',
+  borderRadius: 0,
+  background: 'var(--pixel-chat-code-bg)',
+};
+
+const attachRemoveBtnStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: -6,
+  right: -6,
+  width: 16,
+  height: 16,
+  padding: 0,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: 9,
+  lineHeight: 1,
+  background: 'var(--pixel-bg)',
+  color: 'var(--pixel-text)',
+  border: '2px solid var(--pixel-border)',
+  borderRadius: 0,
+  cursor: 'pointer',
+};
+
+const dropOverlayStyle: React.CSSProperties = {
+  position: 'absolute',
+  inset: CHAT_DROP_OVERLAY_INSET_PX,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  border: '2px dashed var(--pixel-accent)',
+  borderRadius: 0,
+  background: CHAT_DROP_OVERLAY_BG,
+  color: 'var(--pixel-text)',
+  fontSize: CHAT_BODY_FONT_SIZE_PX + 2,
+  pointerEvents: 'none',
+  zIndex: 'var(--pixel-controls-z)',
+};
+
+const userImageChipStyle: React.CSSProperties = {
+  fontSize: CHAT_BODY_FONT_SIZE_PX - 2,
+  color: 'var(--pixel-text-dim)',
 };
 
 const composerRowStyle: React.CSSProperties = {
@@ -305,12 +422,19 @@ function TurnSeparator({ costUsd, durationMs }: { costUsd: number; durationMs: n
 
 function ChatItemView({ item }: { item: ChatItem }) {
   switch (item.kind) {
-    case 'user':
+    case 'user': {
+      const imageCount = item.imageCount ?? 0;
       return (
         <div className="pixel-chat-body" style={userBubbleStyle}>
+          {imageCount > 0 && (
+            <div style={userImageChipStyle}>
+              🖼 {imageCount} image{imageCount > 1 ? 's' : ''}
+            </div>
+          )}
           {item.text}
         </div>
       );
+    }
     case 'assistant':
       return (
         <div style={assistantStyle}>
@@ -360,11 +484,16 @@ export function ChatView({ agentId, visible }: ChatViewProps) {
   const [draft, setDraft] = useState('');
   // Host is the source of truth ('chat-mode'); updated optimistically on click
   const [mode, setMode] = useState<ChatPermissionMode>('default');
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [attachWarning, setAttachWarning] = useState<string | null>(null);
+  const [dragActive, setDragActive] = useState(false);
 
   const listRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const nearBottomRef = useRef(true);
   const replayedRef = useRef(false);
+  const warningTimerRef = useRef<number | null>(null);
+  const dragCounterRef = useRef(0);
 
   useEffect(() => {
     // Ignore live chat-events until the replay arrives — the replay contains
@@ -460,13 +589,149 @@ export function ChatView({ agentId, visible }: ChatViewProps) {
     setHasNew(false);
   }, []);
 
+  // ── Image attachments ──────────────────────────────────────
+
+  // Transient warning line above the composer; auto-clears
+  const showAttachWarning = useCallback((text: string) => {
+    setAttachWarning(text);
+    if (warningTimerRef.current !== null) {
+      window.clearTimeout(warningTimerRef.current);
+    }
+    warningTimerRef.current = window.setTimeout(() => {
+      setAttachWarning(null);
+      warningTimerRef.current = null;
+    }, CHAT_ATTACH_WARNING_MS);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (warningTimerRef.current !== null) {
+        window.clearTimeout(warningTimerRef.current);
+      }
+    };
+  }, []);
+
+  /** Validate + base64-encode image files into the attachment tray. */
+  const addImageFiles = useCallback(
+    async (files: File[]) => {
+      let added = 0;
+      for (const file of files) {
+        if (!CHAT_ACCEPTED_IMAGE_TYPES.includes(file.type)) continue;
+        if (file.size > CHAT_MAX_IMAGE_BYTES) {
+          showAttachWarning(`"${file.name}" is too large (max ${CHAT_MAX_IMAGE_MB} MB per image)`);
+          continue;
+        }
+        if (attachments.length + added >= CHAT_MAX_ATTACHMENTS) {
+          showAttachWarning(`Up to ${CHAT_MAX_ATTACHMENTS} images per message`);
+          break;
+        }
+        try {
+          const data = await readFileAsBase64(file);
+          const attachment: ChatAttachment = {
+            id: crypto.randomUUID(),
+            mediaType: file.type,
+            data,
+            previewUrl: `data:${file.type};base64,${data}`,
+          };
+          setAttachments((prev) =>
+            prev.length >= CHAT_MAX_ATTACHMENTS ? prev : [...prev, attachment],
+          );
+          added++;
+        } catch {
+          showAttachWarning(`Could not read "${file.name}"`);
+        }
+      }
+    },
+    [attachments.length, showAttachWarning],
+  );
+
+  const removeAttachment = useCallback((id: string) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+  }, []);
+
+  // Pasted images go to the tray; plain text paste keeps default behavior
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const files = Array.from(e.clipboardData.items)
+        .filter((item) => item.kind === 'file' && CHAT_ACCEPTED_IMAGE_TYPES.includes(item.type))
+        .map((item) => item.getAsFile())
+        .filter((f): f is File => f !== null);
+      if (files.length === 0) return;
+      e.preventDefault();
+      void addImageFiles(files);
+    },
+    [addImageFiles],
+  );
+
+  // ── Drag & drop (whole ChatView is the drop target) ────────
+
+  const handleDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    dragCounterRef.current++;
+    setDragActive(true);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (!dragHasFiles(e)) return;
+    // Required to allow dropping (and stops Electron from navigating)
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (!dragHasFiles(e)) return;
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+    if (dragCounterRef.current === 0) {
+      setDragActive(false);
+    }
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounterRef.current = 0;
+      setDragActive(false);
+
+      const files = Array.from(e.dataTransfer.files);
+      if (files.length === 0) return;
+
+      const images = files.filter((f) => CHAT_ACCEPTED_IMAGE_TYPES.includes(f.type));
+      if (images.length > 0) {
+        void addImageFiles(images);
+      }
+
+      // Non-image files: insert their absolute paths so Claude can read them
+      const paths = files
+        .filter((f) => !CHAT_ACCEPTED_IMAGE_TYPES.includes(f.type))
+        .map((f) => getElectronAPI()?.getPathForFile?.(f) ?? '')
+        .filter((p) => p !== '')
+        .map(quotePath);
+      if (paths.length > 0) {
+        setDraft((prev) => {
+          const sep = prev === '' || prev.endsWith(' ') ? '' : ' ';
+          return prev + sep + paths.join(' ');
+        });
+        textareaRef.current?.focus();
+      }
+    },
+    [addImageFiles],
+  );
+
   const handleSend = useCallback(() => {
     const text = draft.trim();
-    if (text === '') return;
+    if (text === '' && attachments.length === 0) return;
     // No local echo — the host sends 'user-text' as the single source of truth
-    vscode.postMessage({ type: 'chatSend', id: agentId, text });
+    const images = attachments.map(({ mediaType, data }) => ({ mediaType, data }));
+    if (images.length > 0) {
+      vscode.postMessage({ type: 'chatSend', id: agentId, text, images });
+    } else {
+      vscode.postMessage({ type: 'chatSend', id: agentId, text });
+    }
     setDraft('');
-  }, [agentId, draft]);
+    setAttachments([]);
+  }, [agentId, draft, attachments]);
 
   const handleStop = useCallback(() => {
     vscode.postMessage({ type: 'chatInterrupt', id: agentId });
@@ -494,7 +759,7 @@ export function ChatView({ agentId, visible }: ChatViewProps) {
     [agentId],
   );
 
-  const sendDisabled = draft.trim() === '';
+  const sendDisabled = draft.trim() === '' && attachments.length === 0;
 
   return (
     <div
@@ -504,8 +769,14 @@ export function ChatView({ agentId, visible }: ChatViewProps) {
         display: visible ? 'flex' : 'none',
         flexDirection: 'column',
         background: 'var(--pixel-bg)',
+        position: 'relative',
       }}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
     >
+      {dragActive && <div style={dropOverlayStyle}>Drop files</div>}
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         <div
           ref={listRef}
@@ -543,6 +814,29 @@ export function ChatView({ agentId, visible }: ChatViewProps) {
         </div>
       )}
 
+      {attachWarning !== null && (
+        <div className="pixel-chat-body" style={attachWarningStyle}>
+          {attachWarning}
+        </div>
+      )}
+
+      {attachments.length > 0 && (
+        <div style={attachTrayStyle}>
+          {attachments.map((attachment) => (
+            <div key={attachment.id} style={attachThumbWrapStyle}>
+              <img src={attachment.previewUrl} alt="attached image" style={attachThumbImgStyle} />
+              <button
+                style={attachRemoveBtnStyle}
+                onClick={() => removeAttachment(attachment.id)}
+                title="Remove image"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div style={composerRowStyle}>
         <ModeSelector mode={mode} onSelect={handleModeSelect} />
         <textarea
@@ -551,6 +845,7 @@ export function ChatView({ agentId, visible }: ChatViewProps) {
           rows={1}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          onPaste={handlePaste}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();

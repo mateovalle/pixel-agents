@@ -11,6 +11,8 @@ export interface ElectronAPI {
   ptyResize?(id: string, cols: number, rows: number): void;
   ptyKill?(id: string): void;
   ptyReady?(id: string): void;
+  /** Absolute filesystem path of a dropped File ('' if unavailable). */
+  getPathForFile?(file: File): string;
 }
 
 declare function acquireVsCodeApi(): VsCodeApi;
