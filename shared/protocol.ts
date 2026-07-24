@@ -72,6 +72,18 @@ export type ChatEvent =
   | { kind: 'status'; text: string }
   | { kind: 'error'; message: string };
 
+/** Permission modes exposed in the chat UI (subset of Claude Code's modes). */
+export type ChatPermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
+
+/** A past session that can be resumed as a chat agent. */
+export interface ResumableSession {
+  sessionId: string;
+  /** Last-modified time of the transcript (epoch ms). */
+  mtimeMs: number;
+  /** First user prompt (truncated) for identification. */
+  preview: string;
+}
+
 // ── Usage tracking (Electron only) ───────────────────────────
 
 export interface ProjectUsage {
@@ -164,6 +176,10 @@ export type HostToWebviewMessage =
     }
   /** The request was resolved elsewhere (abort/turn end) — remove the card. */
   | { type: 'chat-permission-resolved'; agentId: number; requestId: string }
+  /** Current permission mode of a chat session (sent on init and change). */
+  | { type: 'chat-mode'; agentId: number; mode: ChatPermissionMode }
+  /** Resumable sessions for a folder the user picked (reply to listResumableSessions). */
+  | { type: 'sessionList'; folderPath: string; sessions: ResumableSession[] }
   // Usage
   | { type: 'usageSummary'; summary: UsageSummary };
 
@@ -198,4 +214,10 @@ export type WebviewToHostMessage =
   | { type: 'exportLayout' }
   | { type: 'importLayout' }
   /** Request an up-to-date UsageSummary (host replies with 'usageSummary'). */
-  | { type: 'getUsageSummary' };
+  | { type: 'getUsageSummary' }
+  /** Switch a chat session's permission mode (host echoes 'chat-mode'). */
+  | { type: 'chatSetPermissionMode'; id: number; mode: ChatPermissionMode }
+  /** Pick a folder and list its resumable sessions (host replies 'sessionList'). */
+  | { type: 'listResumableSessions' }
+  /** Resume a past session as a new chat agent. */
+  | { type: 'resumeChatAgent'; folderPath: string; sessionId: string };

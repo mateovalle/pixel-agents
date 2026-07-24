@@ -111,6 +111,13 @@ export const CHAT_DURATION_DECIMALS = 1;
 export const CHAT_MS_PER_SEC = 1000;
 export const CHAT_COPY_FEEDBACK_MS = 1200;
 export const CHAT_DOT_STAGGER_SEC = 0.2;
+export const CHAT_MODE_MENU_MIN_WIDTH_PX = 140;
+export const CHAT_RESUME_MODAL_WIDTH_PX = 380;
+export const CHAT_RESUME_LIST_MAX_HEIGHT_PX = 360;
+export const CHAT_RESUME_PREVIEW_MAX_LINES = 2;
+export const SECONDS_PER_MINUTE = 60;
+export const MINUTES_PER_HOUR = 60;
+export const HOURS_PER_DAY = 24;
 
 // ── Game Logic ───────────────────────────────────────────────
 export const MAX_DELTA_TIME_SEC = 0.1;

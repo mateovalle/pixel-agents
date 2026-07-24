@@ -1,6 +1,8 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
+import type { HostToWebviewMessage, ResumableSession } from '../../shared/protocol.js';
 import { BottomToolbar } from './components/BottomToolbar.js';
+import { ResumePicker } from './components/chat/ResumePicker.js';
 import { DebugView } from './components/DebugView.js';
 import { TerminalPanel } from './components/TerminalPanel.js';
 import { TerminalSplitter } from './components/TerminalSplitter.js';
@@ -144,6 +146,27 @@ function App() {
   const [isDebugMode, setIsDebugMode] = useState(false);
   const [terminalVisible, setTerminalVisible] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(250);
+
+  // Resume-session picker — opened by a 'sessionList' reply from the host;
+  // a newer 'sessionList' while open replaces the contents.
+  const [sessionList, setSessionList] = useState<{
+    folderPath: string;
+    sessions: ResumableSession[];
+  } | null>(null);
+
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      const msg = e.data as HostToWebviewMessage;
+      if (!msg || typeof msg !== 'object') return;
+      if (msg.type === 'sessionList') {
+        setSessionList({ folderPath: msg.folderPath, sessions: msg.sessions });
+      }
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, []);
+
+  const handleCloseResumePicker = useCallback(() => setSessionList(null), []);
 
   const handleToggleDebugMode = useCallback(() => setIsDebugMode((prev) => !prev), []);
 
@@ -359,6 +382,14 @@ function App() {
           panRef={editor.panRef}
           onCloseAgent={handleCloseAgent}
         />
+
+        {sessionList && (
+          <ResumePicker
+            folderPath={sessionList.folderPath}
+            sessions={sessionList.sessions}
+            onClose={handleCloseResumePicker}
+          />
+        )}
 
         {isDebugMode && (
           <DebugView

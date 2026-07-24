@@ -140,6 +140,23 @@ export function BottomToolbar({
         >
           + Terminal
         </button>
+        <button
+          onClick={() => vscode.postMessage({ type: 'listResumableSessions' })}
+          onMouseEnter={() => setHovered('resume')}
+          onMouseLeave={() => setHovered(null)}
+          style={{
+            ...btnBase,
+            padding: '5px 8px',
+            fontSize: '20px',
+            marginLeft: 4,
+            background: hovered === 'resume' ? 'var(--pixel-btn-hover-bg)' : btnBase.background,
+            border: '2px solid var(--pixel-border)',
+            color: 'var(--pixel-text-dim)',
+          }}
+          title="Resume a past session as a chat agent"
+        >
+          Resume
+        </button>
         {isFolderPickerOpen && (
           <div
             style={{

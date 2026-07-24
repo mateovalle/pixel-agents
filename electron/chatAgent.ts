@@ -18,7 +18,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk' with { 'resolution-mode': 'import' };
 import * as path from 'path';
 
-import type { ChatEvent } from '../shared/protocol.js';
+import type { ChatEvent, ChatPermissionMode } from '../shared/protocol.js';
 import type { Send } from '../src/core/types.js';
 
 const CHAT_HISTORY_MAX_EVENTS = 2000;
@@ -84,8 +84,10 @@ export interface ChatSession {
   busy: boolean;
   /** Last time the user sent a prompt — used for /clear attribution. */
   lastInputAt: number;
+  mode: ChatPermissionMode;
   send(text: string): void;
   interrupt(): void;
+  setMode(mode: ChatPermissionMode): void;
   respondPermission(requestId: string, allow: boolean, message?: string): void;
   dispose(): void;
 }
@@ -96,6 +98,8 @@ export function startChatSession(opts: {
   cwd: string;
   label: string;
   send: Send;
+  /** When set, continue this existing session instead of starting fresh. */
+  resume?: boolean;
   onExit: () => void;
   /** Called once per completed turn with the SDK's exact cost/duration. */
   onTurnComplete?: (costUsd: number, durationMs: number) => void;
@@ -114,6 +118,7 @@ export function startChatSession(opts: {
     history: [],
     busy: false,
     lastInputAt: Date.now(),
+    mode: 'default',
 
     send(text: string): void {
       if (disposed) return;
@@ -132,6 +137,20 @@ export function startChatSession(opts: {
       void query?.interrupt().catch(() => {
         /* not running */
       });
+    },
+
+    setMode(mode: ChatPermissionMode): void {
+      if (disposed) return;
+      void (async () => {
+        try {
+          await query?.setPermissionMode(mode);
+          session.mode = mode;
+        } catch (err) {
+          console.error(`[Pixel Agents] Chat ${agentId}: setPermissionMode failed`, err);
+        }
+        // Echo the authoritative mode either way so the UI reconciles
+        send({ type: 'chat-mode', agentId, mode: session.mode });
+      })();
     },
 
     respondPermission(requestId: string, allow: boolean, message?: string): void {
@@ -247,12 +266,16 @@ export function startChatSession(opts: {
       });
     } else if (msg.type === 'system' && msg.subtype === 'compact_boundary') {
       emit({ kind: 'status', text: 'Context compacted' });
+    } else if (msg.type === 'system' && msg.subtype === 'init') {
+      send({ type: 'chat-mode', agentId, mode: session.mode });
     }
   }
 
   const sdkOptions: Options = {
     cwd,
-    sessionId,
+    // Resuming continues the same session id (no fork), so the transcript
+    // watcher registered on this id keeps working in both cases.
+    ...(opts.resume ? { resume: sessionId } : { sessionId }),
     permissionMode: 'default',
     includePartialMessages: true,
     canUseTool: (toolName, toolInput, callOpts) =>

@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { HostToWebviewMessage } from '../../../../shared/protocol.js';
+import type { ChatPermissionMode, HostToWebviewMessage } from '../../../../shared/protocol.js';
 import {
   CHAT_BODY_FONT_SIZE_PX,
   CHAT_COMPOSER_LINE_HEIGHT_PX,
   CHAT_COMPOSER_MAX_ROWS,
   CHAT_COST_DECIMALS,
   CHAT_DURATION_DECIMALS,
+  CHAT_MODE_MENU_MIN_WIDTH_PX,
   CHAT_MS_PER_SEC,
   CHAT_NEAR_BOTTOM_PX,
 } from '../../constants.js';
@@ -150,6 +151,132 @@ const stopBtnStyle: React.CSSProperties = {
   color: 'var(--pixel-chat-red)',
 };
 
+interface ModeOption {
+  mode: ChatPermissionMode;
+  label: string;
+  color: string;
+}
+
+const MODE_OPTIONS: ModeOption[] = [
+  { mode: 'default', label: 'Ask', color: 'var(--pixel-text-dim)' },
+  { mode: 'acceptEdits', label: 'Accept Edits', color: 'var(--pixel-chat-green)' },
+  { mode: 'plan', label: 'Plan', color: 'var(--pixel-accent)' },
+  { mode: 'bypassPermissions', label: 'Bypass', color: 'var(--pixel-chat-red)' },
+];
+
+const modeBtnStyle: React.CSSProperties = {
+  padding: '5px 8px',
+  fontSize: CHAT_BODY_FONT_SIZE_PX - 1,
+  background: 'var(--pixel-btn-bg)',
+  border: '2px solid var(--pixel-border)',
+  borderRadius: 0,
+  cursor: 'pointer',
+  flexShrink: 0,
+  whiteSpace: 'nowrap',
+  lineHeight: `${CHAT_COMPOSER_LINE_HEIGHT_PX}px`,
+};
+
+const modeMenuStyle: React.CSSProperties = {
+  position: 'absolute',
+  bottom: '100%',
+  left: 0,
+  marginBottom: 4,
+  background: 'var(--pixel-bg)',
+  border: '2px solid var(--pixel-border)',
+  borderRadius: 0,
+  boxShadow: 'var(--pixel-shadow)',
+  minWidth: CHAT_MODE_MENU_MIN_WIDTH_PX,
+  zIndex: 'var(--pixel-controls-z)',
+};
+
+const modeMenuItemStyle: React.CSSProperties = {
+  display: 'block',
+  width: '100%',
+  textAlign: 'left',
+  padding: '5px 10px',
+  fontSize: CHAT_BODY_FONT_SIZE_PX - 1,
+  background: 'transparent',
+  border: 'none',
+  borderRadius: 0,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+};
+
+/**
+ * Compact permission-mode selector: a button showing the current mode that
+ * opens an upward popup listing the four ChatPermissionModes.
+ */
+function ModeSelector({
+  mode,
+  onSelect,
+}: {
+  mode: ChatPermissionMode;
+  onSelect: (mode: ChatPermissionMode) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [hovered, setHovered] = useState<ChatPermissionMode | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // Close the popup on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handleMouseDown = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleMouseDown);
+    return () => document.removeEventListener('mousedown', handleMouseDown);
+  }, [open]);
+
+  const current = MODE_OPTIONS.find((o) => o.mode === mode) ?? MODE_OPTIONS[0];
+  const isDefault = current.mode === 'default';
+
+  return (
+    <div ref={rootRef} style={{ position: 'relative', flexShrink: 0 }}>
+      <button
+        style={{
+          ...modeBtnStyle,
+          color: isDefault ? 'var(--pixel-text-dim)' : current.color,
+          border: isDefault ? modeBtnStyle.border : `2px solid ${current.color}`,
+        }}
+        onClick={() => setOpen((v) => !v)}
+        title="Permission mode"
+      >
+        {current.label} {open ? '▾' : '▴'}
+      </button>
+      {open && (
+        <div style={modeMenuStyle}>
+          {MODE_OPTIONS.map((option) => (
+            <button
+              key={option.mode}
+              style={{
+                ...modeMenuItemStyle,
+                color: option.color,
+                background:
+                  option.mode === mode
+                    ? 'var(--pixel-active-bg)'
+                    : hovered === option.mode
+                      ? 'var(--pixel-btn-hover-bg)'
+                      : 'transparent',
+              }}
+              onClick={() => {
+                setOpen(false);
+                onSelect(option.mode);
+              }}
+              onMouseEnter={() => setHovered(option.mode)}
+              onMouseLeave={() => setHovered(null)}
+            >
+              {option.mode === mode ? '▸ ' : ''}
+              {option.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ThinkingItem({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   return (
@@ -231,6 +358,8 @@ export function ChatView({ agentId, visible }: ChatViewProps) {
   const [permissions, setPermissions] = useState<PermissionRequestInfo[]>([]);
   const [hasNew, setHasNew] = useState(false);
   const [draft, setDraft] = useState('');
+  // Host is the source of truth ('chat-mode'); updated optimistically on click
+  const [mode, setMode] = useState<ChatPermissionMode>('default');
 
   const listRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -277,6 +406,9 @@ export function ChatView({ agentId, visible }: ChatViewProps) {
         if (msg.agentId !== agentId) return;
         const requestId = msg.requestId;
         setPermissions((prev) => prev.filter((p) => p.requestId !== requestId));
+      } else if (msg.type === 'chat-mode') {
+        if (msg.agentId !== agentId) return;
+        setMode(msg.mode);
       }
     };
 
@@ -339,6 +471,14 @@ export function ChatView({ agentId, visible }: ChatViewProps) {
   const handleStop = useCallback(() => {
     vscode.postMessage({ type: 'chatInterrupt', id: agentId });
   }, [agentId]);
+
+  const handleModeSelect = useCallback(
+    (next: ChatPermissionMode) => {
+      setMode(next); // optimistic; the host echoes 'chat-mode' to reconcile
+      vscode.postMessage({ type: 'chatSetPermissionMode', id: agentId, mode: next });
+    },
+    [agentId],
+  );
 
   const handlePermissionResponse = useCallback(
     (requestId: string, allow: boolean, message?: string) => {
@@ -404,6 +544,7 @@ export function ChatView({ agentId, visible }: ChatViewProps) {
       )}
 
       <div style={composerRowStyle}>
+        <ModeSelector mode={mode} onSelect={handleModeSelect} />
         <textarea
           ref={textareaRef}
           className="pixel-chat-body"

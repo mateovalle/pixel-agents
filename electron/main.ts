@@ -5,7 +5,7 @@ import * as pty from 'node-pty';
 import * as os from 'os';
 import * as path from 'path';
 
-import type { AgentSeatMeta, WebviewToHostMessage } from '../shared/protocol.js';
+import type { AgentSeatMeta, ResumableSession, WebviewToHostMessage } from '../shared/protocol.js';
 import {
   loadCharacterSprites,
   loadDefaultLayout,
@@ -259,7 +259,12 @@ function killPty(ptyId: string): void {
 
 // ── Agent lifecycle (internal sessions only) ─────────────────
 /** Registers the office character + transcript watching shared by both agent kinds. */
-function registerAgent(kind: 'terminal' | 'chat', cwd: string, sessionId: string): AgentState {
+function registerAgent(
+  kind: 'terminal' | 'chat',
+  cwd: string,
+  sessionId: string,
+  skipToEnd = false,
+): AgentState {
   const projectDir = getProjectDirPath(cwd);
   const expectedFile = path.join(projectDir, `${sessionId}.jsonl`);
   // Pre-register so the /clear scan won't treat this session's own file as new
@@ -273,7 +278,7 @@ function registerAgent(kind: 'terminal' | 'chat', cwd: string, sessionId: string
     cwd,
   };
   ctx.agents.set(id, agent);
-  pollForJsonlFile(id);
+  pollForJsonlFile(id, skipToEnd);
   return agent;
 }
 
@@ -304,9 +309,9 @@ function launchAgent(cwd: string): void {
   ensureProjectScan(agent.projectDir);
 }
 
-function launchChatAgent(cwd: string): void {
-  const sessionId = crypto.randomUUID();
-  const agent = registerAgent('chat', cwd, sessionId);
+function launchChatAgent(cwd: string, resumeSessionId?: string): void {
+  const sessionId = resumeSessionId ?? crypto.randomUUID();
+  const agent = registerAgent('chat', cwd, sessionId, !!resumeSessionId);
   const label = `Agent ${nextTerminalIndex++}`;
 
   const session = startChatSession({
@@ -314,6 +319,7 @@ function launchChatAgent(cwd: string): void {
     sessionId,
     cwd,
     label,
+    resume: !!resumeSessionId,
     send: ctx.send,
     onTurnComplete: (costUsd, durationMs) => {
       recordTurnUsage(cwd, costUsd, durationMs);
@@ -340,7 +346,7 @@ function launchChatAgent(cwd: string): void {
 }
 
 /** Poll until the agent's JSONL file appears, then start watching it. */
-function pollForJsonlFile(agentId: number): void {
+function pollForJsonlFile(agentId: number, skipToEnd = false): void {
   const timer = setInterval(() => {
     const agent = ctx.agents.get(agentId);
     if (!agent) {
@@ -353,8 +359,14 @@ function pollForJsonlFile(agentId: number): void {
         console.log(`Agent ${agentId}: found JSONL ${path.basename(agent.jsonlFile)}`);
         clearInterval(timer);
         jsonlPollTimers.delete(agentId);
+        if (skipToEnd) {
+          // Resumed session — don't replay the whole history into the office
+          agent.fileOffset = fs.statSync(agent.jsonlFile).size;
+        }
         startFileWatching(ctx, agentId, agent.jsonlFile);
-        readNewLines(ctx, agentId);
+        if (!skipToEnd) {
+          readNewLines(ctx, agentId);
+        }
       }
     } catch {
       /* file may not exist yet */
@@ -492,6 +504,76 @@ function reassignAgentToFile(agent: AgentState, newFilePath: string): void {
   readNewLines(ctx, agent.id);
 }
 
+// ── Session resume ───────────────────────────────────────────
+const RESUME_LIST_MAX = 20;
+const PREVIEW_READ_BYTES = 16384;
+const PREVIEW_MAX_CHARS = 120;
+
+/** Reads the first user prompt from a transcript for display in the resume picker. */
+function readSessionPreview(jsonlFile: string): string {
+  try {
+    const fd = fs.openSync(jsonlFile, 'r');
+    const buf = Buffer.alloc(PREVIEW_READ_BYTES);
+    const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    for (const line of buf.toString('utf-8', 0, bytesRead).split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const record = JSON.parse(line) as {
+          type?: string;
+          message?: { content?: unknown };
+        };
+        if (record.type !== 'user') continue;
+        const content = record.message?.content;
+        let text = '';
+        if (typeof content === 'string') {
+          text = content;
+        } else if (Array.isArray(content)) {
+          const textBlock = content.find(
+            (b: { type?: string; text?: string }) => b?.type === 'text' && b.text,
+          ) as { text?: string } | undefined;
+          text = textBlock?.text ?? '';
+        }
+        text = text.trim();
+        if (text) {
+          return text.length > PREVIEW_MAX_CHARS ? text.slice(0, PREVIEW_MAX_CHARS) + '…' : text;
+        }
+      } catch {
+        /* partial line */
+      }
+    }
+  } catch {
+    /* unreadable */
+  }
+  return '(no prompt)';
+}
+
+function listResumableSessions(cwd: string): ResumableSession[] {
+  const projectDir = getProjectDirPath(cwd);
+  const activeSessionIds = new Set([...ctx.agents.values()].map((a) => a.sessionId));
+  let files: Array<{ file: string; mtimeMs: number }>;
+  try {
+    files = fs
+      .readdirSync(projectDir)
+      .filter((f) => f.endsWith('.jsonl'))
+      .map((f) => {
+        const file = path.join(projectDir, f);
+        return { file, mtimeMs: fs.statSync(file).mtimeMs };
+      });
+  } catch {
+    return [];
+  }
+  return files
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    .filter(({ file }) => !activeSessionIds.has(path.basename(file, '.jsonl')))
+    .slice(0, RESUME_LIST_MAX)
+    .map(({ file, mtimeMs }) => ({
+      sessionId: path.basename(file, '.jsonl'),
+      mtimeMs,
+      preview: readSessionPreview(file),
+    }));
+}
+
 // ── Renderer message handling ────────────────────────────────
 function isTrustedSender(event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean {
   return mainWindow !== null && event.sender === mainWindow.webContents;
@@ -573,6 +655,17 @@ function handleWebviewMessage(msg: WebviewToHostMessage): void {
     }
   } else if (msg.type === 'chatPermissionResponse') {
     chatSessions.get(msg.id)?.respondPermission(msg.requestId, msg.allow, msg.message);
+  } else if (msg.type === 'chatSetPermissionMode') {
+    chatSessions.get(msg.id)?.setMode(msg.mode);
+  } else if (msg.type === 'listResumableSessions') {
+    void (async () => {
+      const cwd = await resolveAgentCwd(undefined);
+      if (cwd) {
+        ctx.send({ type: 'sessionList', folderPath: cwd, sessions: listResumableSessions(cwd) });
+      }
+    })();
+  } else if (msg.type === 'resumeChatAgent') {
+    launchChatAgent(msg.folderPath, msg.sessionId);
   } else if (msg.type === 'saveLayout') {
     if (isValidLayout(msg.layout)) {
       layoutWatcher?.markOwnWrite();
