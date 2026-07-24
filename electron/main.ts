@@ -17,8 +17,12 @@ import {
   sendFloorTiles,
   sendWallTiles,
 } from '../src/core/assetLoader.js';
-import { LAYOUT_FILE_DIR } from '../src/core/constants.js';
-import { readNewLines, startFileWatching } from '../src/core/fileWatcher.js';
+import {
+  JSONL_POLL_INTERVAL_MS,
+  LAYOUT_FILE_DIR,
+  PROJECT_SCAN_INTERVAL_MS,
+} from '../src/core/constants.js';
+import { readNewLines, startFileWatching, stopFileWatching } from '../src/core/fileWatcher.js';
 import type { LayoutWatcher } from '../src/core/layoutPersistence.js';
 import {
   isValidLayout,
@@ -27,31 +31,34 @@ import {
   writeLayoutToFile,
 } from '../src/core/layoutPersistence.js';
 import {
+  cancelPermissionTimer,
+  cancelWaitingTimer,
+  clearAgentActivity,
+} from '../src/core/timerManager.js';
+import {
   type CoreAgentState,
   createCoreAgentState,
   type TrackerContext,
 } from '../src/core/types.js';
 
 // ── Electron-specific constants ──────────────────────────────
-const SESSION_SCAN_INTERVAL_MS = 3000;
-const SESSION_STALE_MS = 24 * 60 * 60 * 1000; // 24h
-const SESSION_TAIL_BYTES = 4096; // catch-up window when adopting a session
 const PTY_SCROLLBACK_MAX_CHARS = 200_000;
 const WINDOW_WIDTH = 900;
 const WINDOW_HEIGHT = 700;
 const WINDOW_BACKGROUND = '#1e1e2e';
 
 const DATA_DIR = path.join(os.homedir(), LAYOUT_FILE_DIR);
-const DISMISSED_SESSIONS_FILE = path.join(DATA_DIR, 'dismissed-sessions.json');
 const AGENT_SEATS_FILE = path.join(DATA_DIR, 'agent-seats.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 
 // ── Types ────────────────────────────────────────────────────
+// Agents exist ONLY for terminals this app spawned (internal sessions).
+// External Claude sessions (iTerm, VS Code, ...) are not tracked.
 interface AgentState extends CoreAgentState {
-  ptyId?: string;
-  sessionId?: string;
-  cwd?: string; // Workspace path extracted from JSONL
+  ptyId: string;
+  sessionId: string;
+  cwd: string;
 }
 
 interface PtyRecord {
@@ -59,6 +66,8 @@ interface PtyRecord {
   label: string;
   scrollback: string;
   sessionId?: string;
+  /** Last time the user typed into this terminal — used for /clear attribution */
+  lastInputAt: number;
 }
 
 // ── State ────────────────────────────────────────────────────
@@ -66,7 +75,8 @@ let mainWindow: BrowserWindow | null = null;
 let nextAgentId = 1;
 let nextTerminalIndex = 1;
 const knownJsonlFiles = new Set<string>();
-let scanTimer: ReturnType<typeof setInterval> | null = null;
+const jsonlPollTimers = new Map<number, ReturnType<typeof setInterval>>();
+const projectScanTimers = new Map<string, ReturnType<typeof setInterval>>();
 let layoutWatcher: LayoutWatcher | null = null;
 
 const ctx: TrackerContext<AgentState> = {
@@ -79,7 +89,7 @@ const ctx: TrackerContext<AgentState> = {
   send: (message) => {
     mainWindow?.webContents.send('main-message', message);
   },
-  // Electron does not persist the agent list — sessions are rediscovered by scan
+  // Sessions live only as long as their PTYs — nothing to persist
   persistAgents: () => {},
 };
 
@@ -88,8 +98,6 @@ const ptys = new Map<string, PtyRecord>();
 const ptySessionIds = new Map<string, string>(); // sessionId → ptyId
 const agentToPty = new Map<number, string>(); // agentId → ptyId
 const ptyToAgent = new Map<string, number>(); // ptyId → agentId
-
-const dismissedJsonlFiles = new Set<string>(loadJsonFile<string[]>(DISMISSED_SESSIONS_FILE) ?? []);
 
 // ── Small JSON persistence helpers ───────────────────────────
 function loadJsonFile<T>(file: string): T | null {
@@ -112,23 +120,8 @@ function saveJsonFile(file: string, value: unknown): void {
   }
 }
 
-function saveDismissedSessions(): void {
-  saveJsonFile(DISMISSED_SESSIONS_FILE, [...dismissedJsonlFiles]);
-}
-
-function cleanupDismissedSessions(): void {
-  let changed = false;
-  for (const file of dismissedJsonlFiles) {
-    if (!fs.existsSync(file)) {
-      dismissedJsonlFiles.delete(file);
-      changed = true;
-    }
-  }
-  if (changed) saveDismissedSessions();
-}
-
 // Seat/palette metadata is keyed by SESSION id, not agent id — agent ids are
-// assigned in discovery order and are not stable across app restarts.
+// assigned in creation order and are not stable across window reloads.
 function loadSeatMetaBySession(): Record<string, AgentSeatMeta> {
   return (
     loadJsonFile<{ bySession?: Record<string, AgentSeatMeta> }>(AGENT_SEATS_FILE)?.bySession ?? {}
@@ -139,28 +132,9 @@ function loadSettings(): { soundEnabled: boolean } {
   return { soundEnabled: true, ...loadJsonFile<{ soundEnabled?: boolean }>(SETTINGS_FILE) };
 }
 
-/** Read the first user message from a JSONL file to extract the workspace cwd. */
-function extractCwdFromJsonl(jsonlFile: string): string | undefined {
-  try {
-    const fd = fs.openSync(jsonlFile, 'r');
-    // Read first 8KB — cwd is in one of the first few lines
-    const buf = Buffer.alloc(8192);
-    const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0);
-    fs.closeSync(fd);
-    const text = buf.toString('utf-8', 0, bytesRead);
-    for (const line of text.split('\n')) {
-      if (!line.trim()) continue;
-      try {
-        const record = JSON.parse(line);
-        if (record.cwd) return record.cwd;
-      } catch {
-        /* partial line */
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-  return undefined;
+/** Same transcript-directory mapping Claude Code uses: cwd → ~/.claude/projects/<sanitized>. */
+function getProjectDirPath(cwd: string): string {
+  return path.join(CLAUDE_PROJECTS_DIR, cwd.replace(/[^a-zA-Z0-9-]/g, '-'));
 }
 
 // The core asset loaders append 'assets/' themselves, so this returns the
@@ -224,7 +198,13 @@ function spawnPty(opts: {
     env: { ...process.env, TERM: 'xterm-256color' } as Record<string, string>,
   });
 
-  const record: PtyRecord = { proc, label: opts.label, scrollback: '', sessionId: opts.sessionId };
+  const record: PtyRecord = {
+    proc,
+    label: opts.label,
+    scrollback: '',
+    sessionId: opts.sessionId,
+    lastInputAt: Date.now(),
+  };
   ptys.set(ptyId, record);
   if (opts.sessionId) {
     ptySessionIds.set(opts.sessionId, ptyId);
@@ -242,15 +222,8 @@ function spawnPty(opts: {
     if (record.sessionId && ptySessionIds.get(record.sessionId) === ptyId) {
       ptySessionIds.delete(record.sessionId);
     }
-    const agentId = ptyToAgent.get(ptyId);
-    if (agentId !== undefined) {
-      agentToPty.delete(agentId);
-      ptyToAgent.delete(ptyId);
-      const agent = ctx.agents.get(agentId);
-      if (agent && agent.ptyId === ptyId) {
-        agent.ptyId = undefined;
-      }
-    }
+    // agentToPty/ptyToAgent are kept so clicking the character still focuses
+    // the (exited) terminal tab; they're cleaned up in removeAgent.
   });
 
   return ptyId;
@@ -264,109 +237,185 @@ function killPty(ptyId: string): void {
   }
 }
 
-// ── Session Auto-Detection ───────────────────────────────────
-function scanForSessions(): void {
-  if (!fs.existsSync(CLAUDE_PROJECTS_DIR)) return;
+// ── Agent lifecycle (internal sessions only) ─────────────────
+function launchAgent(cwd: string): void {
+  const sessionId = crypto.randomUUID();
+  const projectDir = getProjectDirPath(cwd);
+  const expectedFile = path.join(projectDir, `${sessionId}.jsonl`);
+  // Pre-register so the /clear scan won't treat this session's own file as new
+  knownJsonlFiles.add(expectedFile);
 
-  try {
-    const projectDirs = fs.readdirSync(CLAUDE_PROJECTS_DIR);
-    const now = Date.now();
+  const label = `Agent ${nextTerminalIndex++}`;
+  const ptyId = spawnPty({
+    cwd,
+    command: `claude --session-id ${sessionId}`,
+    sessionId,
+    label,
+  });
 
-    for (const dir of projectDirs) {
-      const projectPath = path.join(CLAUDE_PROJECTS_DIR, dir);
-      try {
-        if (!fs.statSync(projectPath).isDirectory()) continue;
-      } catch {
-        continue;
-      }
+  const id = nextAgentId++;
+  const agent: AgentState = {
+    ...createCoreAgentState(id, projectDir, expectedFile),
+    ptyId,
+    sessionId,
+    cwd,
+  };
+  ctx.agents.set(id, agent);
+  agentToPty.set(id, ptyId);
+  ptyToAgent.set(ptyId, id);
 
-      let jsonlFiles: string[];
-      try {
-        jsonlFiles = fs
-          .readdirSync(projectPath)
-          .filter((f) => f.endsWith('.jsonl'))
-          .map((f) => path.join(projectPath, f));
-      } catch {
-        continue;
-      }
+  console.log(`Agent ${id}: launched session ${sessionId} in ${cwd}`);
+  ctx.send({ type: 'pty-created', ptyId, label });
+  ctx.send({ type: 'agentCreated', id, ptyId, folderName: path.basename(cwd) });
 
-      for (const file of jsonlFiles) {
-        if (knownJsonlFiles.has(file)) continue;
-        if (dismissedJsonlFiles.has(file)) continue;
-
-        // Only pick up recently active sessions
-        try {
-          const stat = fs.statSync(file);
-          if (now - stat.mtimeMs > SESSION_STALE_MS) continue;
-        } catch {
-          continue;
-        }
-
-        knownJsonlFiles.add(file);
-        createAgentForFile(file, projectPath);
-      }
-    }
-  } catch (err) {
-    console.error('Error scanning sessions:', err);
-  }
+  ensureProjectScan(projectDir);
+  pollForJsonlFile(id);
 }
 
-function createAgentForFile(jsonlFile: string, projectDir: string): void {
-  const id = nextAgentId++;
-  const agent: AgentState = createCoreAgentState(id, projectDir, jsonlFile);
-
-  // Skip to near end of file — only show recent activity
-  try {
-    const stat = fs.statSync(jsonlFile);
-    agent.fileOffset = Math.max(0, stat.size - SESSION_TAIL_BYTES);
-  } catch {
-    // Start from beginning if stat fails
-  }
-
-  // Extract workspace cwd from JSONL file
-  agent.cwd = extractCwdFromJsonl(jsonlFile);
-  agent.sessionId = path.basename(jsonlFile, '.jsonl');
-
-  // Link to PTY if this is a session we spawned
-  const linkedPtyId = ptySessionIds.get(agent.sessionId);
-  if (linkedPtyId) {
-    agent.ptyId = linkedPtyId;
-    agentToPty.set(id, linkedPtyId);
-    ptyToAgent.set(linkedPtyId, id);
-  }
-
-  ctx.agents.set(id, agent);
-  console.log(
-    `Agent ${id}: tracking ${path.basename(jsonlFile)} in ${agent.cwd || path.basename(projectDir)}`,
-  );
-  const folderName = agent.cwd ? path.basename(agent.cwd) : undefined;
-  ctx.send({ type: 'agentCreated', id, ptyId: linkedPtyId, folderName });
-
-  startFileWatching(ctx, id, jsonlFile);
-  readNewLines(ctx, id);
+/** Poll until the agent's JSONL file appears, then start watching it. */
+function pollForJsonlFile(agentId: number): void {
+  const timer = setInterval(() => {
+    const agent = ctx.agents.get(agentId);
+    if (!agent) {
+      clearInterval(timer);
+      jsonlPollTimers.delete(agentId);
+      return;
+    }
+    try {
+      if (fs.existsSync(agent.jsonlFile)) {
+        console.log(`Agent ${agentId}: found JSONL ${path.basename(agent.jsonlFile)}`);
+        clearInterval(timer);
+        jsonlPollTimers.delete(agentId);
+        startFileWatching(ctx, agentId, agent.jsonlFile);
+        readNewLines(ctx, agentId);
+      }
+    } catch {
+      /* file may not exist yet */
+    }
+  }, JSONL_POLL_INTERVAL_MS);
+  jsonlPollTimers.set(agentId, timer);
 }
 
 function removeAgent(agentId: number): void {
   const agent = ctx.agents.get(agentId);
   if (!agent) return;
 
-  ctx.fileWatchers.get(agentId)?.close();
-  ctx.fileWatchers.delete(agentId);
-  const pt = ctx.pollingTimers.get(agentId);
-  if (pt) clearInterval(pt);
-  ctx.pollingTimers.delete(agentId);
-  try {
-    fs.unwatchFile(agent.jsonlFile);
-  } catch {
-    /* ignore */
+  const jp = jsonlPollTimers.get(agentId);
+  if (jp) clearInterval(jp);
+  jsonlPollTimers.delete(agentId);
+
+  stopFileWatching(ctx, agentId, agent.jsonlFile);
+  cancelWaitingTimer(ctx, agentId);
+  cancelPermissionTimer(ctx, agentId);
+
+  const ptyId = agentToPty.get(agentId);
+  if (ptyId) {
+    agentToPty.delete(agentId);
+    ptyToAgent.delete(ptyId);
   }
-  const wt = ctx.waitingTimers.get(agentId);
-  if (wt) clearTimeout(wt);
-  ctx.waitingTimers.delete(agentId);
-  const permT = ctx.permissionTimers.get(agentId);
-  if (permT) clearTimeout(permT);
-  ctx.permissionTimers.delete(agentId);
   ctx.agents.delete(agentId);
+
+  // Stop scanning project dirs no other agent uses
+  let dirStillUsed = false;
+  for (const a of ctx.agents.values()) {
+    if (a.projectDir === agent.projectDir) {
+      dirStillUsed = true;
+      break;
+    }
+  }
+  if (!dirStillUsed) {
+    const st = projectScanTimers.get(agent.projectDir);
+    if (st) clearInterval(st);
+    projectScanTimers.delete(agent.projectDir);
+  }
+}
+
+// ── /clear detection ─────────────────────────────────────────
+// `/clear` makes claude start a NEW transcript file in the same project dir.
+// We scan each internal agent's project dir; a new file is reassigned to the
+// agent there whose terminal most recently received input (the /clear was
+// typed into some terminal — that one had the last keystrokes).
+function ensureProjectScan(projectDir: string): void {
+  if (projectScanTimers.has(projectDir)) return;
+  try {
+    for (const f of fs.readdirSync(projectDir)) {
+      if (f.endsWith('.jsonl')) knownJsonlFiles.add(path.join(projectDir, f));
+    }
+  } catch {
+    /* dir may not exist yet */
+  }
+
+  const timer = setInterval(() => {
+    scanForNewJsonlFiles(projectDir);
+  }, PROJECT_SCAN_INTERVAL_MS);
+  projectScanTimers.set(projectDir, timer);
+}
+
+function scanForNewJsonlFiles(projectDir: string): void {
+  let files: string[];
+  try {
+    files = fs
+      .readdirSync(projectDir)
+      .filter((f) => f.endsWith('.jsonl'))
+      .map((f) => path.join(projectDir, f));
+  } catch {
+    return;
+  }
+
+  // Prune deleted files so the known set doesn't grow forever
+  const current = new Set(files);
+  for (const known of knownJsonlFiles) {
+    if (known.startsWith(projectDir + path.sep) && !current.has(known)) {
+      knownJsonlFiles.delete(known);
+    }
+  }
+
+  for (const file of files) {
+    if (knownJsonlFiles.has(file)) continue;
+    knownJsonlFiles.add(file);
+
+    const target = mostRecentlyTypedAgentIn(projectDir);
+    if (!target) continue; // no internal agent here — external activity, ignore
+    console.log(
+      `[Pixel Agents] New JSONL ${path.basename(file)} → reassigning agent ${target.id} (/clear)`,
+    );
+    reassignAgentToFile(target, file);
+  }
+}
+
+function mostRecentlyTypedAgentIn(projectDir: string): AgentState | null {
+  let best: AgentState | null = null;
+  let bestTime = -1;
+  for (const agent of ctx.agents.values()) {
+    if (agent.projectDir !== projectDir) continue;
+    const t = ptys.get(agent.ptyId)?.lastInputAt ?? 0;
+    if (t > bestTime) {
+      bestTime = t;
+      best = agent;
+    }
+  }
+  return best;
+}
+
+function reassignAgentToFile(agent: AgentState, newFilePath: string): void {
+  stopFileWatching(ctx, agent.id, agent.jsonlFile);
+  cancelWaitingTimer(ctx, agent.id);
+  cancelPermissionTimer(ctx, agent.id);
+  clearAgentActivity(ctx, agent.id);
+
+  const newSessionId = path.basename(newFilePath, '.jsonl');
+  ptySessionIds.delete(agent.sessionId);
+  ptySessionIds.set(newSessionId, agent.ptyId);
+  const record = ptys.get(agent.ptyId);
+  if (record) record.sessionId = newSessionId;
+
+  agent.sessionId = newSessionId;
+  agent.jsonlFile = newFilePath;
+  agent.fileOffset = 0;
+  agent.lineBuffer = Buffer.alloc(0);
+
+  startFileWatching(ctx, agent.id, newFilePath);
+  readNewLines(ctx, agent.id);
 }
 
 // ── Renderer message handling ────────────────────────────────
@@ -378,7 +427,11 @@ function setupIpcHandlers(): void {
   // PTY I/O — keystrokes and geometry only; commands are built in main.
   ipcMain.on('pty-input', (event, opts: { id: string; data: string }) => {
     if (!isTrustedSender(event)) return;
-    ptys.get(opts.id)?.proc.write(opts.data);
+    const record = ptys.get(opts.id);
+    if (record) {
+      record.lastInputAt = Date.now();
+      record.proc.write(opts.data);
+    }
   });
 
   ipcMain.on('pty-resize', (event, opts: { id: string; cols: number; rows: number }) => {
@@ -415,16 +468,7 @@ function handleWebviewMessage(msg: WebviewToHostMessage): void {
   if (msg.type === 'webviewReady') {
     onWebviewReady();
   } else if (msg.type === 'openClaude') {
-    const sessionId = crypto.randomUUID();
-    const cwd = msg.folderPath || os.homedir();
-    const label = `Agent ${nextTerminalIndex++}`;
-    const ptyId = spawnPty({
-      cwd,
-      command: `claude --session-id ${sessionId}`,
-      sessionId,
-      label,
-    });
-    ctx.send({ type: 'pty-created', ptyId, label });
+    launchAgent(msg.folderPath || os.homedir());
   } else if (msg.type === 'saveLayout') {
     if (isValidLayout(msg.layout)) {
       layoutWatcher?.markOwnWrite();
@@ -436,13 +480,6 @@ function handleWebviewMessage(msg: WebviewToHostMessage): void {
     saveJsonFile(SETTINGS_FILE, { soundEnabled: !!msg.enabled });
   } else if (msg.type === 'closeAgent') {
     const id = msg.id;
-    const agent = ctx.agents.get(id);
-    // Remember this session so it doesn't reappear on restart
-    if (agent) {
-      dismissedJsonlFiles.add(agent.jsonlFile);
-      saveDismissedSessions();
-    }
-    // Kill associated PTY and close its terminal tab
     const ptyId = agentToPty.get(id);
     if (ptyId) {
       ctx.send({ type: 'pty-close-tab', ptyId });
@@ -451,7 +488,10 @@ function handleWebviewMessage(msg: WebviewToHostMessage): void {
     removeAgent(id);
     ctx.send({ type: 'agentClosed', id });
   } else if (msg.type === 'focusAgent') {
-    focusAgent(msg.id);
+    const agent = ctx.agents.get(msg.id);
+    if (agent) {
+      ctx.send({ type: 'pty-focus', ptyId: agent.ptyId, agentId: msg.id });
+    }
   } else if (msg.type === 'openSessionsFolder') {
     if (fs.existsSync(CLAUDE_PROJECTS_DIR)) {
       shell.openPath(CLAUDE_PROJECTS_DIR);
@@ -478,12 +518,10 @@ function onWebviewReady(): void {
   const agentMeta: Record<number, AgentSeatMeta> = {};
   const folderNames: Record<number, string> = {};
   for (const [id, agent] of ctx.agents) {
-    if (agent.sessionId && metaBySession[agent.sessionId]) {
+    if (metaBySession[agent.sessionId]) {
       agentMeta[id] = metaBySession[agent.sessionId];
     }
-    if (agent.cwd) {
-      folderNames[id] = path.basename(agent.cwd);
-    }
+    folderNames[id] = path.basename(agent.cwd);
   }
   ctx.send({ type: 'existingAgents', agents: agentIds, agentMeta, folderNames });
 
@@ -523,36 +561,15 @@ function onWebviewReady(): void {
 
 function saveAgentSeats(seatsById: Record<string, AgentSeatMeta> | undefined): void {
   if (!seatsById) return;
-  // Re-key by session id so the metadata survives restarts (agent ids don't)
+  // Re-key by session id so the metadata survives window reloads (agent ids don't)
   const bySession = loadSeatMetaBySession();
   for (const [idStr, meta] of Object.entries(seatsById)) {
     const agent = ctx.agents.get(Number(idStr));
-    if (agent?.sessionId) {
+    if (agent) {
       bySession[agent.sessionId] = meta;
     }
   }
   saveJsonFile(AGENT_SEATS_FILE, { bySession });
-}
-
-function focusAgent(id: number): void {
-  let ptyId = agentToPty.get(id);
-
-  if (!ptyId) {
-    // Agent adopted from an external session — open a plain shell in its
-    // workspace (resuming the session here could conflict with the external
-    // claude process that owns it).
-    const agent = ctx.agents.get(id);
-    if (!agent) return;
-    const label = agent.cwd ? `Shell: ${path.basename(agent.cwd)}` : `Agent ${nextTerminalIndex++}`;
-    ptyId = spawnPty({ cwd: agent.cwd, label });
-    agent.ptyId = ptyId;
-    agentToPty.set(id, ptyId);
-    ptyToAgent.set(ptyId, id);
-    ctx.send({ type: 'pty-created', ptyId, label });
-    return;
-  }
-
-  ctx.send({ type: 'pty-focus', ptyId, agentId: id });
 }
 
 async function exportLayout(): Promise<void> {
@@ -629,10 +646,10 @@ function createWindow(): void {
 
 // ── App Lifecycle ────────────────────────────────────────────
 function cleanupAndQuit(): void {
-  if (scanTimer) clearInterval(scanTimer);
-  scanTimer = null;
   layoutWatcher?.dispose();
   layoutWatcher = null;
+  for (const timer of projectScanTimers.values()) clearInterval(timer);
+  projectScanTimers.clear();
   for (const id of [...ctx.agents.keys()]) removeAgent(id);
   for (const ptyId of [...ptys.keys()]) killPty(ptyId);
   ptys.clear();
@@ -641,15 +658,6 @@ function cleanupAndQuit(): void {
 app.whenReady().then(() => {
   fixPathEnv();
   setupIpcHandlers();
-
-  // Clean up stale dismissed sessions on startup
-  cleanupDismissedSessions();
-
-  // Initial scan for active sessions
-  scanForSessions();
-
-  // Periodic scan for new sessions
-  scanTimer = setInterval(scanForSessions, SESSION_SCAN_INTERVAL_MS);
 
   // Cross-window layout sync (e.g. edits made from a VS Code window)
   layoutWatcher = watchLayoutFile((layout) => {
@@ -664,8 +672,8 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  // On macOS the app keeps running (dock icon) — agents, PTYs, and the
-  // session scan must survive so reopening the window restores everything.
+  // On macOS the app keeps running (dock icon) — agents and PTYs must
+  // survive so reopening the window restores everything.
   if (process.platform !== 'darwin') {
     app.quit();
   }

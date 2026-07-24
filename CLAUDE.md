@@ -33,10 +33,13 @@ src/                          — VS Code extension host (imports src/core)
 electron/                     — Electron desktop host (imports src/core; tsconfig rootDir=.. →
                                 dist-electron/electron/main.js + dist-electron/src/core/)
   main.ts                     — Main process: window, node-pty terminals (main constructs ALL commands;
-                                renderer only sends keystrokes), session auto-discovery (24h mtime scan of
-                                ~/.claude/projects), scrollback replay (pty-ready→pty-replay), seat/palette
-                                persistence keyed by SESSION id (~/.pixel-agents/agent-seats.json), settings,
-                                login-shell PATH fix for packaged builds, sandbox+navigation guards
+                                renderer only sends keystrokes). INTERNAL SESSIONS ONLY: agents exist solely
+                                for terminals the app spawned (no scanning of external sessions). /clear
+                                detection scans each agent's project dir; a new JSONL is reassigned to the
+                                agent there whose PTY most recently received input. Scrollback replay
+                                (pty-ready→pty-replay), seat/palette persistence keyed by SESSION id
+                                (~/.pixel-agents/agent-seats.json), settings, login-shell PATH fix for
+                                packaged builds, sandbox+navigation guards
   preload.ts                  — Minimal contextBridge: postMessage/onMessage + ptyInput/Resize/Kill/Ready
 
 webview-ui/src/               — React + TypeScript (Vite)
