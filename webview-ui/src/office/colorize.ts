@@ -88,7 +88,7 @@ export function colorizeSprite(sprite: SpriteData, color: FloorColor): SpriteDat
 }
 
 /** Convert HSL (h: 0-360, s: 0-1, l: 0-1) to #RRGGBB hex string */
-function hslToHex(h: number, s: number, l: number): string {
+export function hslToHex(h: number, s: number, l: number): string {
   const c = (1 - Math.abs(2 * l - 1)) * s;
   const hp = h / 60;
   const x = c * (1 - Math.abs((hp % 2) - 1));

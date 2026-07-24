@@ -231,7 +231,15 @@ function App() {
   }
 
   return (
-    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div
+      style={{
+        width: '100%',
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+      }}
+    >
       <style>{`
         @keyframes pixel-agents-pulse {
           0%, 100% { opacity: 1; }
@@ -256,7 +264,6 @@ function App() {
           onDeleteSelected={editor.handleDeleteSelected}
           onRotateSelected={editor.handleRotateSelected}
           onDragMove={editor.handleDragMove}
-          editorTick={editor.editorTick}
           zoom={editor.zoom}
           onZoomChange={editor.handleZoomChange}
           panRef={editor.panRef}
@@ -364,7 +371,12 @@ function App() {
       {terminalVisible && (
         <TerminalSplitter onDrag={handleSplitterDrag} onDoubleClick={handleSplitterDoubleClick} />
       )}
-      <TerminalPanel height={terminalVisible ? terminalHeight : 0} onTerminalCreated={handleTerminalCreated} onShowTerminal={handleTerminalCreated} onAllTabsClosed={handleAllTabsClosed} />
+      <TerminalPanel
+        height={terminalVisible ? terminalHeight : 0}
+        onTerminalCreated={handleTerminalCreated}
+        onShowTerminal={handleTerminalCreated}
+        onAllTabsClosed={handleAllTabsClosed}
+      />
     </div>
   );
 }

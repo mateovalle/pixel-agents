@@ -32,9 +32,14 @@ export function SettingsModal({
   onToggleDebugMode,
 }: SettingsModalProps) {
   const [hovered, setHovered] = useState<string | null>(null);
-  const [soundLocal, setSoundLocal] = useState(isSoundEnabled);
+  // Bump to re-render after toggling sound (source of truth lives in notificationSound)
+  const [, setSoundTick] = useState(0);
 
   if (!isOpen) return null;
+
+  // Read the current setting on every open render so it stays in sync with
+  // external changes (e.g., settingsLoaded from the extension after mount)
+  const soundOn = isSoundEnabled();
 
   return (
     <>
@@ -144,7 +149,7 @@ export function SettingsModal({
           onClick={() => {
             const newVal = !isSoundEnabled();
             setSoundEnabled(newVal);
-            setSoundLocal(newVal);
+            setSoundTick((n) => n + 1);
             vscode.postMessage({ type: 'setSoundEnabled', enabled: newVal });
           }}
           onMouseEnter={() => setHovered('sound')}
@@ -161,7 +166,7 @@ export function SettingsModal({
               height: 14,
               border: '2px solid rgba(255, 255, 255, 0.5)',
               borderRadius: 0,
-              background: soundLocal ? 'rgba(90, 140, 255, 0.8)' : 'transparent',
+              background: soundOn ? 'rgba(90, 140, 255, 0.8)' : 'transparent',
               flexShrink: 0,
               display: 'flex',
               alignItems: 'center',
@@ -171,7 +176,7 @@ export function SettingsModal({
               color: '#fff',
             }}
           >
-            {soundLocal ? 'X' : ''}
+            {soundOn ? 'X' : ''}
           </span>
         </button>
         <button

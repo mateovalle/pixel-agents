@@ -17,6 +17,16 @@ export function useEditorKeyboard(
   useEffect(() => {
     if (!isEditMode) return;
     const handler = (e: KeyboardEvent) => {
+      // Ignore shortcuts while typing in form controls (e.g., editor toolbar inputs)
+      const target = e.target;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        (target instanceof HTMLElement && target.isContentEditable)
+      ) {
+        return;
+      }
       if (e.key === 'Escape') {
         // Multi-stage Esc: deselect item → close tool → deselect placed → close editor
         if (editorState.activeTool === EditTool.FURNITURE_PICK) {

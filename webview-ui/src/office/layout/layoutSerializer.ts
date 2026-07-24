@@ -224,15 +224,6 @@ export function layoutToSeats(furniture: PlacedFurniture[]): Map<string, Seat> {
   return seats;
 }
 
-/** Get the set of tiles occupied by seats (so they can be excluded from blocked tiles) */
-export function getSeatTiles(seats: Map<string, Seat>): Set<string> {
-  const tiles = new Set<string>();
-  for (const seat of seats.values()) {
-    tiles.add(`${seat.seatCol},${seat.seatRow}`);
-  }
-  return tiles;
-}
-
 /** Default floor colors for the two rooms */
 const DEFAULT_LEFT_ROOM_COLOR: FloorColor = { h: 35, s: 30, b: 15, c: 0 }; // warm beige
 const DEFAULT_RIGHT_ROOM_COLOR: FloorColor = { h: 25, s: 45, b: 5, c: 10 }; // warm brown
@@ -308,24 +299,6 @@ export function createDefaultLayout(): OfficeLayout {
   ];
 
   return { version: 1, cols: DEFAULT_COLS, rows: DEFAULT_ROWS, tiles, tileColors, furniture };
-}
-
-/** Serialize layout to JSON string */
-export function serializeLayout(layout: OfficeLayout): string {
-  return JSON.stringify(layout);
-}
-
-/** Deserialize layout from JSON string, migrating old tile types if needed */
-export function deserializeLayout(json: string): OfficeLayout | null {
-  try {
-    const obj = JSON.parse(json);
-    if (obj && obj.version === 1 && Array.isArray(obj.tiles) && Array.isArray(obj.furniture)) {
-      return migrateLayout(obj as OfficeLayout);
-    }
-  } catch {
-    /* ignore parse errors */
-  }
-  return null;
 }
 
 /**

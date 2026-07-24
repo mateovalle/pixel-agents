@@ -9,7 +9,7 @@
  * Bitmask convention: N=1, E=2, S=4, W=8. Out-of-bounds = NOT wall.
  */
 
-import { getColorizedSprite } from './colorize.js';
+import { getColorizedSprite, hslToHex } from './colorize.js';
 import type {
   FloorColor,
   FurnitureInstance,
@@ -24,11 +24,25 @@ let wallSprites: SpriteData[] | null = null;
 /** Set wall sprites (called once when extension sends wallTilesLoaded) */
 export function setWallSprites(sprites: SpriteData[]): void {
   wallSprites = sprites;
+  wallInstanceCache = null;
 }
 
 /** Check if wall sprites have been loaded */
 export function hasWallSprites(): boolean {
   return wallSprites !== null;
+}
+
+/** Build the 4-bit neighbor bitmask for a wall tile (N=1, E=2, S=4, W=8) */
+function computeWallMask(col: number, row: number, tileMap: TileTypeVal[][]): number {
+  const tmRows = tileMap.length;
+  const tmCols = tmRows > 0 ? tileMap[0].length : 0;
+
+  let mask = 0;
+  if (row > 0 && tileMap[row - 1][col] === TileType.WALL) mask |= 1; // N
+  if (col < tmCols - 1 && tileMap[row][col + 1] === TileType.WALL) mask |= 2; // E
+  if (row < tmRows - 1 && tileMap[row + 1][col] === TileType.WALL) mask |= 4; // S
+  if (col > 0 && tileMap[row][col - 1] === TileType.WALL) mask |= 8; // W
+  return mask;
 }
 
 /**
@@ -42,16 +56,7 @@ export function getWallSprite(
 ): { sprite: SpriteData; offsetY: number } | null {
   if (!wallSprites) return null;
 
-  const tmRows = tileMap.length;
-  const tmCols = tmRows > 0 ? tileMap[0].length : 0;
-
-  // Build 4-bit neighbor bitmask
-  let mask = 0;
-  if (row > 0 && tileMap[row - 1][col] === TileType.WALL) mask |= 1; // N
-  if (col < tmCols - 1 && tileMap[row][col + 1] === TileType.WALL) mask |= 2; // E
-  if (row < tmRows - 1 && tileMap[row + 1][col] === TileType.WALL) mask |= 4; // S
-  if (col > 0 && tileMap[row][col - 1] === TileType.WALL) mask |= 8; // W
-
+  const mask = computeWallMask(col, row, tileMap);
   const sprite = wallSprites[mask];
   if (!sprite) return null;
 
@@ -72,16 +77,7 @@ export function getColorizedWallSprite(
 ): { sprite: SpriteData; offsetY: number } | null {
   if (!wallSprites) return null;
 
-  const tmRows = tileMap.length;
-  const tmCols = tmRows > 0 ? tileMap[0].length : 0;
-
-  // Build 4-bit neighbor bitmask (same as getWallSprite)
-  let mask = 0;
-  if (row > 0 && tileMap[row - 1][col] === TileType.WALL) mask |= 1; // N
-  if (col < tmCols - 1 && tileMap[row][col + 1] === TileType.WALL) mask |= 2; // E
-  if (row < tmRows - 1 && tileMap[row + 1][col] === TileType.WALL) mask |= 4; // S
-  if (col > 0 && tileMap[row][col - 1] === TileType.WALL) mask |= 8; // W
-
+  const mask = computeWallMask(col, row, tileMap);
   const sprite = wallSprites[mask];
   if (!sprite) return null;
 
@@ -90,6 +86,15 @@ export function getColorizedWallSprite(
 
   return { sprite: colorized, offsetY: TILE_SIZE - sprite.length };
 }
+
+/** Memoized wall instances — rebuilt only when the layout-derived inputs change.
+ *  Keyed by reference: rebuildFromLayout creates fresh tileMap/tileColors arrays. */
+let wallInstanceCache: {
+  tileMap: TileTypeVal[][];
+  tileColors: Array<FloorColor | null> | undefined;
+  cols: number | undefined;
+  instances: FurnitureInstance[];
+} | null = null;
 
 /**
  * Build FurnitureInstance-like objects for all wall tiles so they can participate
@@ -101,6 +106,14 @@ export function getWallInstances(
   cols?: number,
 ): FurnitureInstance[] {
   if (!wallSprites) return [];
+  if (
+    wallInstanceCache &&
+    wallInstanceCache.tileMap === tileMap &&
+    wallInstanceCache.tileColors === tileColors &&
+    wallInstanceCache.cols === cols
+  ) {
+    return wallInstanceCache.instances;
+  }
   const tmRows = tileMap.length;
   const tmCols = tmRows > 0 ? tileMap[0].length : 0;
   const layoutCols = cols ?? tmCols;
@@ -122,6 +135,7 @@ export function getWallInstances(
       });
     }
   }
+  wallInstanceCache = { tileMap, tileColors, cols, instances };
   return instances;
 }
 
@@ -147,43 +161,5 @@ export function wallColorToHex(color: FloorColor): string {
 
   lightness = Math.max(0, Math.min(1, lightness));
 
-  // HSL to hex (same as colorize.ts hslToHex)
-  const satFrac = s / 100;
-  const ch = (1 - Math.abs(2 * lightness - 1)) * satFrac;
-  const hp = h / 60;
-  const x = ch * (1 - Math.abs((hp % 2) - 1));
-  let r1 = 0,
-    g1 = 0,
-    b1 = 0;
-
-  if (hp < 1) {
-    r1 = ch;
-    g1 = x;
-    b1 = 0;
-  } else if (hp < 2) {
-    r1 = x;
-    g1 = ch;
-    b1 = 0;
-  } else if (hp < 3) {
-    r1 = 0;
-    g1 = ch;
-    b1 = x;
-  } else if (hp < 4) {
-    r1 = 0;
-    g1 = x;
-    b1 = ch;
-  } else if (hp < 5) {
-    r1 = x;
-    g1 = 0;
-    b1 = ch;
-  } else {
-    r1 = ch;
-    g1 = 0;
-    b1 = x;
-  }
-
-  const m = lightness - ch / 2;
-  const clamp = (v: number) => Math.max(0, Math.min(255, Math.round((v + m) * 255)));
-
-  return `#${clamp(r1).toString(16).padStart(2, '0')}${clamp(g1).toString(16).padStart(2, '0')}${clamp(b1).toString(16).padStart(2, '0')}`;
+  return hslToHex(h, s / 100, lightness);
 }

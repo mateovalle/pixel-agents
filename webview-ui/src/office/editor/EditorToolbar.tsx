@@ -2,11 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { getColorizedFloorSprite, getFloorPatternCount, hasFloorSprites } from '../floorTiles.js';
 import type { FurnitureCategory, LoadedAssetData } from '../layout/furnitureCatalog.js';
-import {
-  buildDynamicCatalog,
-  getActiveCategories,
-  getCatalogByCategory,
-} from '../layout/furnitureCatalog.js';
+import { getActiveCategories, getCatalogByCategory } from '../layout/furnitureCatalog.js';
 import { getCachedSprite } from '../sprites/spriteCache.js';
 import type { FloorColor, TileType as TileTypeVal } from '../types.js';
 import { EditTool } from '../types.js';
@@ -184,27 +180,14 @@ export function EditorToolbar({
   const [showWallColor, setShowWallColor] = useState(false);
   const [showFurnitureColor, setShowFurnitureColor] = useState(false);
 
-  // Build dynamic catalog from loaded assets
+  // Catalog is built in useExtensionMessages when assets load —
+  // here we only reset to the first available category
   useEffect(() => {
     if (loadedAssets) {
-      try {
-        console.log(
-          `[EditorToolbar] Building dynamic catalog with ${loadedAssets.catalog.length} assets...`,
-        );
-        const success = buildDynamicCatalog(loadedAssets);
-        console.log(`[EditorToolbar] Catalog build result: ${success}`);
-
-        // Reset to first available category if current doesn't exist
-        const activeCategories = getActiveCategories();
-        if (activeCategories.length > 0) {
-          const firstCat = activeCategories[0]?.id;
-          if (firstCat) {
-            console.log(`[EditorToolbar] Setting active category to: ${firstCat}`);
-            setActiveCategory(firstCat);
-          }
-        }
-      } catch (err) {
-        console.error(`[EditorToolbar] Error building dynamic catalog:`, err);
+      const firstCat = getActiveCategories()[0]?.id;
+      if (firstCat) {
+        console.log(`[EditorToolbar] Setting active category to: ${firstCat}`);
+        setActiveCategory(firstCat);
       }
     }
   }, [loadedAssets]);

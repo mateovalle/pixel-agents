@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { CHARACTER_SITTING_OFFSET_PX, TOOL_OVERLAY_VERTICAL_OFFSET } from '../../constants.js';
 import type { SubagentCharacter } from '../../hooks/useExtensionMessages.js';
@@ -52,15 +52,23 @@ export function ToolOverlay({
   onCloseAgent,
 }: ToolOverlayProps) {
   const [, setTick] = useState(0);
+  // Only re-render (and measure the container) while an overlay is visible —
+  // i.e., an agent is hovered or selected — plus one final tick to clear it.
+  const hadOverlayRef = useRef(false);
   useEffect(() => {
     let rafId = 0;
     const tick = () => {
-      setTick((n) => n + 1);
+      const hasOverlay =
+        officeState.hoveredAgentId !== null || officeState.selectedAgentId !== null;
+      if (hasOverlay || hadOverlayRef.current) {
+        setTick((n) => n + 1);
+      }
+      hadOverlayRef.current = hasOverlay;
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafId);
-  }, []);
+  }, [officeState]);
 
   const el = containerRef.current;
   if (!el) return null;

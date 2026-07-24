@@ -124,15 +124,12 @@ export class OfficeState {
       }
     }
 
-    // Relocate any characters that ended up outside bounds or on non-walkable tiles
+    // Relocate any characters that ended up outside bounds or on non-walkable tiles.
+    // Seated characters are exempt — they were snapped to their own seat above,
+    // and seat tiles are non-walkable by design.
     for (const ch of this.characters.values()) {
-      if (ch.seatId) continue; // seated characters are fine
-      if (
-        ch.tileCol < 0 ||
-        ch.tileCol >= layout.cols ||
-        ch.tileRow < 0 ||
-        ch.tileRow >= layout.rows
-      ) {
+      if (ch.seatId) continue;
+      if (!isWalkable(ch.tileCol, ch.tileRow, this.tileMap, this.blockedTiles)) {
         this.relocateCharacterToWalkable(ch);
       }
     }

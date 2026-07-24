@@ -8,8 +8,8 @@ import {
   ZOOM_MIN,
   ZOOM_SCROLL_THRESHOLD,
 } from '../../constants.js';
+import { saveAgentSeats } from '../../hooks/useExtensionMessages.js';
 import { unlockAudio } from '../../notificationSound.js';
-import { vscode } from '../../vscodeApi.js';
 import { canPlaceFurniture, getWallPlacementRow } from '../editor/editorActions.js';
 import type { EditorState } from '../editor/editorState.js';
 import { startGameLoop } from '../engine/gameLoop.js';
@@ -35,7 +35,6 @@ interface OfficeCanvasProps {
   onDeleteSelected: () => void;
   onRotateSelected: () => void;
   onDragMove: (uid: string, newCol: number, newRow: number) => void;
-  editorTick: number;
   zoom: number;
   onZoomChange: (zoom: number) => void;
   panRef: React.MutableRefObject<{ x: number; y: number }>;
@@ -52,7 +51,6 @@ export function OfficeCanvas({
   onDeleteSelected,
   onRotateSelected,
   onDragMove,
-  editorTick: _editorTick,
   zoom,
   onZoomChange,
   panRef,
@@ -275,7 +273,7 @@ export function OfficeCanvas({
       stop();
       observer.disconnect();
     };
-  }, [officeState, resizeCanvas, isEditMode, editorState, _editorTick, zoom, panRef]);
+  }, [officeState, resizeCanvas, isEditMode, editorState, zoom, panRef]);
 
   // Convert CSS mouse coords to world (sprite pixel) coords
   const screenToWorld = useCallback(
@@ -706,12 +704,7 @@ export function OfficeCanvas({
                   officeState.selectedAgentId = null;
                   officeState.cameraFollowId = null;
                   // Persist seat assignments (exclude sub-agents)
-                  const seats: Record<number, { palette: number; seatId: string | null }> = {};
-                  for (const ch of officeState.characters.values()) {
-                    if (ch.isSubagent) continue;
-                    seats[ch.id] = { palette: ch.palette, seatId: ch.seatId };
-                  }
-                  vscode.postMessage({ type: 'saveAgentSeats', seats });
+                  saveAgentSeats(officeState);
                   return;
                 }
               }

@@ -70,8 +70,10 @@ export function findPath(
     { dc: 1, dr: 0 }, // right
   ];
 
-  while (queue.length > 0) {
-    const curr = queue.shift()!;
+  // Index cursor instead of queue.shift() — shift() is O(n) per dequeue
+  let head = 0;
+  while (head < queue.length) {
+    const curr = queue[head++];
     const currKey = key(curr.col, curr.row);
 
     if (currKey === endKey) {

@@ -32,13 +32,7 @@ export interface LoadedAssetData {
 }
 
 export type FurnitureCategory =
-  | 'desks'
-  | 'chairs'
-  | 'storage'
-  | 'decor'
-  | 'electronics'
-  | 'wall'
-  | 'misc';
+  'desks' | 'chairs' | 'storage' | 'decor' | 'electronics' | 'wall' | 'misc';
 
 export interface CatalogEntryWithCategory extends FurnitureCatalogEntry {
   category: FurnitureCategory;
@@ -135,12 +129,16 @@ const rotationGroups = new Map<string, RotationGroup>();
 // ── State groups ────────────────────────────────────────────────
 // Maps asset ID → its on/off counterpart (symmetric for toggle)
 const stateGroups = new Map<string, string>();
-// Directional maps for getOnStateType / getOffStateType
+// Directional map for getOnStateType
 const offToOn = new Map<string, string>(); // off asset → on asset
-const onToOff = new Map<string, string>(); // on asset → off asset
 
-// Internal catalog (includes all variants for getCatalogEntry lookups)
-let internalCatalog: CatalogEntryWithCategory[] | null = null;
+// Internal catalog map (includes all variants for getCatalogEntry lookups) —
+// O(1) lookup since getCatalogEntry is called per-item per-mousemove
+let internalCatalogMap: Map<string, CatalogEntryWithCategory> | null = null;
+// Fallback lookup for the hardcoded catalog
+const fallbackCatalogMap = new Map<string, CatalogEntryWithCategory>(
+  FURNITURE_CATALOG.map((e) => [e.type, e]),
+);
 
 // Dynamic catalog built from loaded assets (when available)
 // Only includes "front" variants for grouped items (shown in editor palette)
@@ -185,7 +183,6 @@ export function buildDynamicCatalog(assets: LoadedAssetData): boolean {
   rotationGroups.clear();
   stateGroups.clear();
   offToOn.clear();
-  onToOff.clear();
 
   // Phase 1: Collect orientations per group (only "off" or stateless variants for rotation)
   const groupMap = new Map<string, Map<string, string>>(); // groupId → (orientation → assetId)
@@ -244,7 +241,6 @@ export function buildDynamicCatalog(assets: LoadedAssetData): boolean {
       stateGroups.set(onId, offId);
       stateGroups.set(offId, onId);
       offToOn.set(offId, onId);
-      onToOff.set(onId, offId);
     }
   }
 
@@ -285,7 +281,7 @@ export function buildDynamicCatalog(assets: LoadedAssetData): boolean {
   }
 
   // Store full internal catalog (all variants — for getCatalogEntry lookups)
-  internalCatalog = allEntries;
+  internalCatalogMap = new Map(allEntries.map((e) => [e.type, e]));
 
   // Visible catalog: exclude non-front variants and "on" state variants
   const visibleEntries = allEntries.filter(
@@ -315,12 +311,9 @@ export function buildDynamicCatalog(assets: LoadedAssetData): boolean {
 }
 
 export function getCatalogEntry(type: string): CatalogEntryWithCategory | undefined {
-  // Check internal catalog first (includes all variants, e.g., non-front rotations)
-  if (internalCatalog) {
-    return internalCatalog.find((e) => e.type === type);
-  }
-  const catalog = dynamicCatalog || FURNITURE_CATALOG;
-  return catalog.find((e) => e.type === type);
+  // Check internal catalog first (includes all variants, e.g., non-front rotations),
+  // falling back to the hardcoded catalog for legacy furniture types
+  return internalCatalogMap?.get(type) ?? fallbackCatalogMap.get(type);
 }
 
 export function getCatalogByCategory(category: FurnitureCategory): CatalogEntryWithCategory[] {
@@ -370,11 +363,6 @@ export function getToggledType(currentType: string): string | null {
 /** Returns the "on" variant if this type has one, otherwise returns the type unchanged. */
 export function getOnStateType(currentType: string): string {
   return offToOn.get(currentType) ?? currentType;
-}
-
-/** Returns the "off" variant if this type has one, otherwise returns the type unchanged. */
-export function getOffStateType(currentType: string): string {
-  return onToOff.get(currentType) ?? currentType;
 }
 
 /** Returns true if the given furniture type is part of a rotation group. */

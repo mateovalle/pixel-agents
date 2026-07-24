@@ -87,12 +87,24 @@ export function useEditorActions(
     }, LAYOUT_SAVE_DEBOUNCE_MS);
   }, []);
 
-  // Apply a layout edit: push undo, clear redo, rebuild state, save, mark dirty
+  // Track whether we've already pushed undo for the current wall color editing session
+  const wallColorEditActiveRef = useRef(false);
+  // Track which uid we've already pushed undo for during color editing
+  // so dragging sliders doesn't create N undo entries
+  const colorEditUidRef = useRef<string | null>(null);
+
+  // Apply a layout edit: push undo, clear redo, rebuild state, save, mark dirty.
+  // Pass undoLayout when the current OfficeState layout was already mutated
+  // (e.g., grid expansion) so undo restores the true pre-edit layout.
   const applyEdit = useCallback(
-    (newLayout: OfficeLayout) => {
+    (newLayout: OfficeLayout, undoLayout?: OfficeLayout) => {
       const os = getOfficeState();
-      editorState.pushUndo(os.getLayout());
+      editorState.pushUndo(undoLayout ?? os.getLayout());
       editorState.clearRedo();
+      // Any other edit ends an active color-slider session so the next
+      // slider touch pushes its own undo entry
+      colorEditUidRef.current = null;
+      wallColorEditActiveRef.current = false;
       editorState.isDirty = true;
       setIsDirty(true);
       os.rebuildFromLayout(newLayout);
@@ -166,9 +178,6 @@ export function useEditorActions(
     [editorState],
   );
 
-  // Track whether we've already pushed undo for the current wall color editing session
-  const wallColorEditActiveRef = useRef(false);
-
   const handleWallColorChange = useCallback(
     (color: FloorColor) => {
       editorState.wallColor = color;
@@ -191,6 +200,8 @@ export function useEditorActions(
           editorState.pushUndo(layout);
           editorState.clearRedo();
           wallColorEditActiveRef.current = true;
+          // A wall color session ends any furniture color session
+          colorEditUidRef.current = null;
         }
         const newLayout = { ...layout, tileColors: newColors };
         editorState.isDirty = true;
@@ -202,10 +213,6 @@ export function useEditorActions(
     },
     [editorState, getOfficeState, saveLayout],
   );
-
-  // Track which uid we've already pushed undo for during color editing
-  // so dragging sliders doesn't create N undo entries
-  const colorEditUidRef = useRef<string | null>(null);
 
   const handleSelectedFurnitureColorChange = useCallback(
     (color: FloorColor | null) => {
@@ -219,6 +226,8 @@ export function useEditorActions(
         editorState.pushUndo(layout);
         editorState.clearRedo();
         colorEditUidRef.current = uid;
+        // A furniture color session ends any wall color session
+        wallColorEditActiveRef.current = false;
       }
 
       // Update color on the placed furniture item (null removes color)
@@ -258,7 +267,6 @@ export function useEditorActions(
     if (newLayout !== os.getLayout()) {
       applyEdit(newLayout);
       editorState.clearSelection();
-      colorEditUidRef.current = null;
     }
   }, [getOfficeState, editorState, applyEdit]);
 
@@ -306,6 +314,9 @@ export function useEditorActions(
     const prev = editorState.popUndo();
     if (!prev) return;
     const os = getOfficeState();
+    // Undo/redo ends any active color-slider session
+    colorEditUidRef.current = null;
+    wallColorEditActiveRef.current = false;
     // Push current layout to redo stack before restoring
     editorState.pushRedo(os.getLayout());
     os.rebuildFromLayout(prev);
@@ -319,6 +330,9 @@ export function useEditorActions(
     const next = editorState.popRedo();
     if (!next) return;
     const os = getOfficeState();
+    // Undo/redo ends any active color-slider session
+    colorEditUidRef.current = null;
+    wallColorEditActiveRef.current = false;
     // Push current layout to undo stack before restoring
     editorState.pushUndo(os.getLayout());
     os.rebuildFromLayout(next);
@@ -423,14 +437,18 @@ export function useEditorActions(
       let layout = os.getLayout();
       let effectiveCol = col;
       let effectiveRow = row;
+      // Pre-expansion layout — pushed as the undo entry so expansion is undoable
+      let undoLayout: OfficeLayout | undefined;
 
-      // Handle ghost border expansion for floor/wall tools
+      // Handle ghost border expansion for floor/wall/erase tools
       if (
         editorState.activeTool === EditTool.TILE_PAINT ||
-        editorState.activeTool === EditTool.WALL_PAINT
+        editorState.activeTool === EditTool.WALL_PAINT ||
+        editorState.activeTool === EditTool.ERASE
       ) {
         const expansion = maybeExpand(layout, col, row);
         if (expansion) {
+          undoLayout = layout;
           layout = expansion.layout;
           effectiveCol = expansion.col;
           effectiveRow = expansion.row;
@@ -439,17 +457,23 @@ export function useEditorActions(
         }
       }
 
-      if (editorState.activeTool === EditTool.TILE_PAINT) {
-        const newLayout = paintTile(
-          layout,
-          effectiveCol,
-          effectiveRow,
-          editorState.selectedTileType,
-          editorState.floorColor,
-        );
-        if (newLayout !== layout) {
-          applyEdit(newLayout);
+      // Commit an edit; also commits a bare grid expansion when the tool action was a no-op
+      const commit = (newLayout: OfficeLayout) => {
+        if (newLayout !== layout || undoLayout) {
+          applyEdit(newLayout, undoLayout);
         }
+      };
+
+      if (editorState.activeTool === EditTool.TILE_PAINT) {
+        commit(
+          paintTile(
+            layout,
+            effectiveCol,
+            effectiveRow,
+            editorState.selectedTileType,
+            editorState.floorColor,
+          ),
+        );
       } else if (editorState.activeTool === EditTool.WALL_PAINT) {
         const idx = effectiveRow * layout.cols + effectiveCol;
         const isWall = layout.tiles[idx] === TileType.WALL;
@@ -461,39 +485,39 @@ export function useEditorActions(
 
         if (editorState.wallDragAdding) {
           // Add wall with color
-          const newLayout = paintTile(
-            layout,
-            effectiveCol,
-            effectiveRow,
-            TileType.WALL,
-            editorState.wallColor,
+          commit(
+            paintTile(layout, effectiveCol, effectiveRow, TileType.WALL, editorState.wallColor),
           );
-          if (newLayout !== layout) {
-            applyEdit(newLayout);
-          }
-        } else {
+        } else if (isWall) {
           // Remove wall → paint floor with current floor settings
-          if (isWall) {
-            const newLayout = paintTile(
+          commit(
+            paintTile(
               layout,
               effectiveCol,
               effectiveRow,
               editorState.selectedTileType,
               editorState.floorColor,
-            );
-            if (newLayout !== layout) {
-              applyEdit(newLayout);
-            }
-          }
+            ),
+          );
+        } else {
+          commit(layout);
         }
       } else if (editorState.activeTool === EditTool.ERASE) {
-        if (col < 0 || col >= layout.cols || row < 0 || row >= layout.rows) return;
-        const idx = row * layout.cols + col;
-        if (layout.tiles[idx] === TileType.VOID) return;
-        const newLayout = paintTile(layout, col, row, TileType.VOID);
-        if (newLayout !== layout) {
-          applyEdit(newLayout);
+        if (
+          effectiveCol < 0 ||
+          effectiveCol >= layout.cols ||
+          effectiveRow < 0 ||
+          effectiveRow >= layout.rows
+        ) {
+          return;
         }
+        const idx = effectiveRow * layout.cols + effectiveCol;
+        if (layout.tiles[idx] === TileType.VOID) {
+          // Nothing to erase — still commit a bare expansion (new tiles are VOID)
+          commit(layout);
+          return;
+        }
+        commit(paintTile(layout, effectiveCol, effectiveRow, TileType.VOID));
       } else if (editorState.activeTool === EditTool.FURNITURE_PLACE) {
         const type = editorState.selectedFurnitureType;
         if (type === '') {

@@ -53,7 +53,7 @@ export interface ExtensionMessageState {
   workspaceFolders: WorkspaceFolder[];
 }
 
-function saveAgentSeats(os: OfficeState): void {
+export function saveAgentSeats(os: OfficeState): void {
   const seats: Record<number, { palette: number; hueShift: number; seatId: string | null }> = {};
   for (const ch of os.characters.values()) {
     if (ch.isSubagent) continue;
@@ -84,6 +84,15 @@ export function useExtensionMessages(
   // Track whether initial layout has been loaded (ref to avoid re-render)
   const layoutReadyRef = useRef(false);
 
+  // Keep latest callbacks in refs so the message handler (subscribed once)
+  // never closes over stale values (e.g., isEditDirty from the first render)
+  const onLayoutLoadedRef = useRef(onLayoutLoaded);
+  const isEditDirtyRef = useRef(isEditDirty);
+  useEffect(() => {
+    onLayoutLoadedRef.current = onLayoutLoaded;
+    isEditDirtyRef.current = isEditDirty;
+  });
+
   useEffect(() => {
     // Buffer agents from existingAgents until layout is loaded
     let pendingAgents: Array<{
@@ -100,7 +109,7 @@ export function useExtensionMessages(
 
       if (msg.type === 'layoutLoaded') {
         // Skip external layout updates while editor has unsaved changes
-        if (layoutReadyRef.current && isEditDirty?.()) {
+        if (layoutReadyRef.current && isEditDirtyRef.current?.()) {
           console.log('[Webview] Skipping external layout update — editor has unsaved changes');
           return;
         }
@@ -108,10 +117,10 @@ export function useExtensionMessages(
         const layout = rawLayout && rawLayout.version === 1 ? migrateLayoutColors(rawLayout) : null;
         if (layout) {
           os.rebuildFromLayout(layout);
-          onLayoutLoaded?.(layout);
+          onLayoutLoadedRef.current?.(layout);
         } else {
           // Default layout — snapshot whatever OfficeState built
-          onLayoutLoaded?.(os.getLayout());
+          onLayoutLoadedRef.current?.(os.getLayout());
         }
         // Add buffered agents now that layout (and seats) are correct
         for (const p of pendingAgents) {
