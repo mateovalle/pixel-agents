@@ -1,22 +1,20 @@
 import type * as vscode from 'vscode';
 
-export interface AgentState {
-  id: number;
+import type { CoreAgentState, TrackerContext } from './core/types.js';
+
+export interface AgentState extends CoreAgentState {
   terminalRef: vscode.Terminal;
-  projectDir: string;
-  jsonlFile: string;
-  fileOffset: number;
-  lineBuffer: string;
-  activeToolIds: Set<string>;
-  activeToolStatuses: Map<string, string>;
-  activeToolNames: Map<string, string>;
-  activeSubagentToolIds: Map<string, Set<string>>; // parentToolId → active sub-tool IDs
-  activeSubagentToolNames: Map<string, Map<string, string>>; // parentToolId → (subToolId → toolName)
-  isWaiting: boolean;
-  permissionSent: boolean;
-  hadToolsInTurn: boolean;
-  /** Workspace folder name (only set for multi-root workspaces) */
-  folderName?: string;
+}
+
+/** Everything the VS Code host threads through the agent-tracking functions. */
+export interface HostContext extends TrackerContext<AgentState> {
+  jsonlPollTimers: Map<number, ReturnType<typeof setInterval>>;
+  knownJsonlFiles: Set<string>;
+  activeAgentId: { current: number | null };
+  nextAgentId: { current: number };
+  nextTerminalIndex: { current: number };
+  /** One scan timer per project dir (multi-root workspaces scan every folder). */
+  projectScanTimers: Map<string, ReturnType<typeof setInterval>>;
 }
 
 export interface PersistedAgent {

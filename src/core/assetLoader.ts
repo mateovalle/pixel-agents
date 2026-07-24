@@ -8,7 +8,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { PNG } from 'pngjs';
-import * as vscode from 'vscode';
 
 import {
   CHAR_COUNT,
@@ -24,6 +23,7 @@ import {
   WALL_PIECE_HEIGHT,
   WALL_PIECE_WIDTH,
 } from './constants.js';
+import type { Send } from './types.js';
 
 export interface FurnitureAsset {
   id: string;
@@ -116,7 +116,7 @@ export async function loadFurnitureAssets(workspaceRoot: string): Promise<Loaded
  * PNG format: RGBA
  * SpriteData format: string[][] where '' = transparent, '#RRGGBB' = opaque color
  */
-function pngToSpriteData(pngBuffer: Buffer, width: number, height: number): string[][] {
+export function pngToSpriteData(pngBuffer: Buffer, width: number, height: number): string[][] {
   try {
     // Parse PNG using pngjs
     const png = PNG.sync.read(pngBuffer);
@@ -250,13 +250,10 @@ export async function loadWallTiles(assetsRoot: string): Promise<LoadedWallTiles
 }
 
 /**
- * Send wall tiles to webview
+ * Send wall tiles to the UI
  */
-export function sendWallTilesToWebview(webview: vscode.Webview, wallTiles: LoadedWallTiles): void {
-  webview.postMessage({
-    type: 'wallTilesLoaded',
-    sprites: wallTiles.sprites,
-  });
+export function sendWallTiles(send: Send, wallTiles: LoadedWallTiles): void {
+  send({ type: 'wallTilesLoaded', sprites: wallTiles.sprites });
   console.log(`📤 Sent ${wallTiles.sprites.length} wall tile pieces to webview`);
 }
 
@@ -314,16 +311,10 @@ export async function loadFloorTiles(assetsRoot: string): Promise<LoadedFloorTil
 }
 
 /**
- * Send floor tiles to webview
+ * Send floor tiles to the UI
  */
-export function sendFloorTilesToWebview(
-  webview: vscode.Webview,
-  floorTiles: LoadedFloorTiles,
-): void {
-  webview.postMessage({
-    type: 'floorTilesLoaded',
-    sprites: floorTiles.sprites,
-  });
+export function sendFloorTiles(send: Send, floorTiles: LoadedFloorTiles): void {
+  send({ type: 'floorTilesLoaded', sprites: floorTiles.sprites });
   console.log(`📤 Sent ${floorTiles.sprites.length} floor tile patterns to webview`);
 }
 
@@ -410,23 +401,17 @@ export async function loadCharacterSprites(
 }
 
 /**
- * Send character sprites to webview
+ * Send character sprites to the UI
  */
-export function sendCharacterSpritesToWebview(
-  webview: vscode.Webview,
-  charSprites: LoadedCharacterSprites,
-): void {
-  webview.postMessage({
-    type: 'characterSpritesLoaded',
-    characters: charSprites.characters,
-  });
+export function sendCharacterSprites(send: Send, charSprites: LoadedCharacterSprites): void {
+  send({ type: 'characterSpritesLoaded', characters: charSprites.characters });
   console.log(`📤 Sent ${charSprites.characters.length} character sprites to webview`);
 }
 
 /**
- * Send loaded assets to webview
+ * Send loaded furniture assets to the UI
  */
-export function sendAssetsToWebview(webview: vscode.Webview, assets: LoadedAssets): void {
+export function sendAssets(send: Send, assets: LoadedAssets): void {
   if (!assets) {
     console.log('[AssetLoader] ⚠️  No assets to send');
     return;
@@ -442,7 +427,7 @@ export function sendAssetsToWebview(webview: vscode.Webview, assets: LoadedAsset
   console.log(
     `[AssetLoader] Posting furnitureAssetsLoaded message with ${assets.catalog.length} assets`,
   );
-  webview.postMessage({
+  send({
     type: 'furnitureAssetsLoaded',
     catalog: assets.catalog,
     sprites: spritesObj,
