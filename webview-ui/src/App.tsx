@@ -1,13 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { HostToWebviewMessage, ResumableSession } from '../../shared/protocol.js';
+import type {
+  HostToWebviewMessage,
+  ResumableSession,
+  WorkspaceInfo,
+} from '../../shared/protocol.js';
 import { BottomToolbar } from './components/BottomToolbar.js';
 import { ResumePicker } from './components/chat/ResumePicker.js';
 import { DebugView } from './components/DebugView.js';
+import { OfficePopup } from './components/OfficePopup.js';
 import { TerminalPanel } from './components/TerminalPanel.js';
 import { TerminalSplitter } from './components/TerminalSplitter.js';
 import { ZoomControls } from './components/ZoomControls.js';
-import { PULSE_ANIMATION_DURATION_SEC } from './constants.js';
+import {
+  OFFICE_POPUP_MARGIN_PX,
+  OFFICE_POPUP_WIDTH_PX,
+  PULSE_ANIMATION_DURATION_SEC,
+} from './constants.js';
 import { useEditorActions } from './hooks/useEditorActions.js';
 import { useEditorKeyboard } from './hooks/useEditorKeyboard.js';
 import { useExtensionMessages } from './hooks/useExtensionMessages.js';
@@ -15,20 +24,20 @@ import { OfficeCanvas } from './office/components/OfficeCanvas.js';
 import { ToolOverlay } from './office/components/ToolOverlay.js';
 import { EditorState } from './office/editor/editorState.js';
 import { EditorToolbar } from './office/editor/EditorToolbar.js';
-import { OfficeState } from './office/engine/officeState.js';
+import { CampusState } from './office/engine/campusState.js';
+import type { OfficeState } from './office/engine/officeState.js';
 import { isRotatable } from './office/layout/furnitureCatalog.js';
 import { EditTool } from './office/types.js';
 import { vscode } from './vscodeApi.js';
 
-// Game state lives outside React — updated imperatively by message handlers
-const officeStateRef = { current: null as OfficeState | null };
+// Game state lives outside React — updated imperatively by message handlers.
+// The campus owns one OfficeState per registered workspace.
+const campus = new CampusState();
 const editorState = new EditorState();
 
+/** The active office — edit-mode target and fallback for editor actions. */
 function getOfficeState(): OfficeState {
-  if (!officeStateRef.current) {
-    officeStateRef.current = new OfficeState();
-  }
-  return officeStateRef.current;
+  return campus.getActiveOffice();
 }
 
 const actionBarBtnStyle: React.CSSProperties = {
@@ -141,11 +150,58 @@ function App() {
     layoutReady,
     loadedAssets,
     workspaceFolders,
-  } = useExtensionMessages(getOfficeState, editor.setLastSavedLayout, isEditDirty);
+    workspaces,
+  } = useExtensionMessages(campus, editor.setLastSavedLayout, isEditDirty);
 
   const [isDebugMode, setIsDebugMode] = useState(false);
   const [terminalVisible, setTerminalVisible] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(250);
+
+  // Office action popup (opened by clicking an office's floor)
+  const [officePopup, setOfficePopup] = useState<{
+    workspace: WorkspaceInfo;
+    x: number;
+    y: number;
+  } | null>(null);
+
+  const handleOfficeClick = useCallback((workspace: WorkspaceInfo, x: number, y: number) => {
+    // Clamp so the popup stays inside the office container (event handler —
+    // ref access is fine here, unlike during render)
+    const rect = containerRef.current?.getBoundingClientRect();
+    const maxX =
+      (rect?.width ?? window.innerWidth) - OFFICE_POPUP_WIDTH_PX - OFFICE_POPUP_MARGIN_PX;
+    setOfficePopup({
+      workspace,
+      x: Math.max(OFFICE_POPUP_MARGIN_PX, Math.min(x, maxX)),
+      y: Math.max(OFFICE_POPUP_MARGIN_PX, y),
+    });
+  }, []);
+
+  const handleCloseOfficePopup = useCallback(() => setOfficePopup(null), []);
+
+  // Close the popup if its workspace was removed
+  useEffect(() => {
+    setOfficePopup((prev) =>
+      prev && !workspaces.some((w) => w.path === prev.workspace.path) ? null : prev,
+    );
+  }, [workspaces]);
+
+  // Edit-mode transitions: reset the camera (campus pan is meaningless for a
+  // single office at origin 0 and vice versa), clear selections on enter, and
+  // propagate the possibly-edited layout to every office on exit.
+  const prevEditModeRef = useRef(editor.isEditMode);
+  useEffect(() => {
+    if (prevEditModeRef.current === editor.isEditMode) return;
+    prevEditModeRef.current = editor.isEditMode;
+    editor.panRef.current = { x: 0, y: 0 };
+    if (editor.isEditMode) {
+      campus.clearSelectionsExcept(null);
+      campus.clearHoverExcept(null);
+      setOfficePopup(null);
+    } else {
+      campus.adoptLayoutFromActive();
+    }
+  }, [editor.isEditMode, editor.panRef]);
 
   // Resume-session picker — opened by a 'sessionList' reply from the host;
   // a newer 'sessionList' while open replaces the contents.
@@ -208,10 +264,9 @@ function App() {
     vscode.postMessage({ type: 'closeAgent', id });
   }, []);
 
-  const handleClick = useCallback((agentId: number) => {
+  const handleClick = useCallback((agentId: number, office: OfficeState) => {
     // If clicked agent is a sub-agent, focus the parent's terminal instead
-    const os = getOfficeState();
-    const meta = os.subagentMeta.get(agentId);
+    const meta = office.subagentMeta.get(agentId);
     const focusId = meta ? meta.parentAgentId : agentId;
     vscode.postMessage({ type: 'focusAgent', id: focusId });
   }, []);
@@ -281,8 +336,11 @@ function App() {
         style={{ flex: 1, position: 'relative', overflow: 'hidden', minHeight: 100 }}
       >
         <OfficeCanvas
+          campus={campus}
           officeState={officeState}
           onClick={handleClick}
+          onOfficeClick={handleOfficeClick}
+          onEmptyClick={handleCloseOfficePopup}
           isEditMode={editor.isEditMode}
           editorState={editorState}
           onEditorTileAction={editor.handleEditorTileAction}
@@ -373,7 +431,8 @@ function App() {
           })()}
 
         <ToolOverlay
-          officeState={officeState}
+          campus={campus}
+          isEditMode={editor.isEditMode}
           agents={agents}
           agentTools={agentTools}
           subagentCharacters={subagentCharacters}
@@ -382,6 +441,43 @@ function App() {
           panRef={editor.panRef}
           onCloseAgent={handleCloseAgent}
         />
+
+        {officePopup && !editor.isEditMode && (
+          <OfficePopup
+            workspace={officePopup.workspace}
+            x={officePopup.x}
+            y={officePopup.y}
+            onClose={handleCloseOfficePopup}
+          />
+        )}
+
+        {workspaces.length === 0 && !editor.isEditMode && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              pointerEvents: 'none',
+              zIndex: 30,
+            }}
+          >
+            <div
+              style={{
+                background: 'var(--pixel-bg)',
+                border: '2px solid var(--pixel-border)',
+                borderRadius: 0,
+                boxShadow: 'var(--pixel-shadow)',
+                padding: '12px 20px',
+                fontSize: '24px',
+                color: 'var(--pixel-text-dim)',
+              }}
+            >
+              Add a workspace to get started
+            </div>
+          </div>
+        )}
 
         {sessionList && (
           <ResumePicker

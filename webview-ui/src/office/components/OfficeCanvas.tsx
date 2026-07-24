@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef } from 'react';
 
+import type { WorkspaceInfo } from '../../../../shared/protocol.js';
 import {
   CAMERA_FOLLOW_LERP,
   CAMERA_FOLLOW_SNAP_THRESHOLD,
+  CAMPUS_CULL_PAD_PX,
+  CAMPUS_FIT_PAD_FRACTION,
   PAN_MARGIN_FRACTION,
   ZOOM_MAX,
   ZOOM_MIN,
@@ -12,6 +15,7 @@ import { saveAgentSeats } from '../../hooks/useExtensionMessages.js';
 import { unlockAudio } from '../../notificationSound.js';
 import { canPlaceFurniture, getWallPlacementRow } from '../editor/editorActions.js';
 import type { EditorState } from '../editor/editorState.js';
+import type { CampusState } from '../engine/campusState.js';
 import { startGameLoop } from '../engine/gameLoop.js';
 import type { OfficeState } from '../engine/officeState.js';
 import type {
@@ -20,13 +24,19 @@ import type {
   RotateButtonBounds,
   SelectionRenderState,
 } from '../engine/renderer.js';
-import { renderFrame } from '../engine/renderer.js';
+import { renderFrame, renderOffice, renderOfficeLabel } from '../engine/renderer.js';
 import { getCatalogEntry, isRotatable } from '../layout/furnitureCatalog.js';
 import { EditTool, TILE_SIZE } from '../types.js';
 
 interface OfficeCanvasProps {
+  campus: CampusState;
+  /** Active office — the edit-mode target (campus.getActiveOffice()). */
   officeState: OfficeState;
-  onClick: (agentId: number) => void;
+  onClick: (agentId: number, office: OfficeState) => void;
+  /** Floor click on an office with nothing else hit — open the workspace popup. */
+  onOfficeClick: (workspace: WorkspaceInfo, cssX: number, cssY: number) => void;
+  /** Click on empty canvas / a character — close any open popup. */
+  onEmptyClick: () => void;
   isEditMode: boolean;
   editorState: EditorState;
   onEditorTileAction: (col: number, row: number) => void;
@@ -40,9 +50,23 @@ interface OfficeCanvasProps {
   panRef: React.MutableRefObject<{ x: number; y: number }>;
 }
 
+interface CampusHit {
+  office: OfficeState;
+  workspace: WorkspaceInfo;
+  originX: number;
+  originY: number;
+  localX: number;
+  localY: number;
+  col: number;
+  row: number;
+}
+
 export function OfficeCanvas({
+  campus,
   officeState,
   onClick,
+  onOfficeClick,
+  onEmptyClick,
   isEditMode,
   editorState,
   onEditorTileAction,
@@ -68,15 +92,25 @@ export function OfficeCanvas({
   const isEraseDraggingRef = useRef(false);
   // Zoom scroll accumulator for trackpad pinch sensitivity
   const zoomAccumulatorRef = useRef(0);
+  // Fit-the-campus zoom applied once on first load
+  const didFitRef = useRef(false);
 
   // Clamp pan so the map edge can't go past a margin inside the viewport
   const clampPan = useCallback(
     (px: number, py: number): { x: number; y: number } => {
       const canvas = canvasRef.current;
       if (!canvas) return { x: px, y: py };
-      const layout = officeState.getLayout();
-      const mapW = layout.cols * TILE_SIZE * zoom;
-      const mapH = layout.rows * TILE_SIZE * zoom;
+      let mapW: number;
+      let mapH: number;
+      if (isEditMode) {
+        const layout = officeState.getLayout();
+        mapW = layout.cols * TILE_SIZE * zoom;
+        mapH = layout.rows * TILE_SIZE * zoom;
+      } else {
+        const size = campus.getPixelSize();
+        mapW = size.w * zoom;
+        mapH = size.h * zoom;
+      }
       const marginX = canvas.width * PAN_MARGIN_FRACTION;
       const marginY = canvas.height * PAN_MARGIN_FRACTION;
       const maxPanX = mapW / 2 + canvas.width / 2 - marginX;
@@ -86,7 +120,7 @@ export function OfficeCanvas({
         y: Math.max(-maxPanY, Math.min(maxPanY, py)),
       };
     },
-    [officeState, zoom],
+    [campus, officeState, zoom, isEditMode],
   );
 
   // Resize canvas backing store to device pixels (no DPR transform on ctx)
@@ -116,110 +150,37 @@ export function OfficeCanvas({
 
     const stop = startGameLoop(canvas, {
       update: (dt) => {
-        officeState.update(dt);
+        campus.update(dt);
       },
       render: (ctx) => {
         // Canvas dimensions are in device pixels
         const w = canvas.width;
         const h = canvas.height;
 
-        // Build editor render state
-        let editorRender: EditorRenderState | undefined;
-        if (isEditMode) {
-          const showGhostBorder =
-            editorState.activeTool === EditTool.TILE_PAINT ||
-            editorState.activeTool === EditTool.WALL_PAINT ||
-            editorState.activeTool === EditTool.ERASE;
-          editorRender = {
-            showGrid: true,
-            ghostSprite: null,
-            ghostCol: editorState.ghostCol,
-            ghostRow: editorState.ghostRow,
-            ghostValid: editorState.ghostValid,
-            selectedCol: 0,
-            selectedRow: 0,
-            selectedW: 0,
-            selectedH: 0,
-            hasSelection: false,
-            isRotatable: false,
-            deleteButtonBounds: null,
-            rotateButtonBounds: null,
-            showGhostBorder,
-            ghostBorderHoverCol: showGhostBorder ? editorState.ghostCol : -999,
-            ghostBorderHoverRow: showGhostBorder ? editorState.ghostRow : -999,
-          };
-
-          // Ghost preview for furniture placement
-          if (editorState.activeTool === EditTool.FURNITURE_PLACE && editorState.ghostCol >= 0) {
-            const entry = getCatalogEntry(editorState.selectedFurnitureType);
-            if (entry) {
-              const placementRow = getWallPlacementRow(
-                editorState.selectedFurnitureType,
-                editorState.ghostRow,
-              );
-              editorRender.ghostSprite = entry.sprite;
-              editorRender.ghostRow = placementRow;
-              editorRender.ghostValid = canPlaceFurniture(
-                officeState.getLayout(),
-                editorState.selectedFurnitureType,
-                editorState.ghostCol,
-                placementRow,
-              );
+        if (!isEditMode) {
+          // ── Campus view: render every office at its origin ──
+          // One-time default camera: fit the whole campus (integer zoom)
+          if (!didFitRef.current && campus.entries.length > 0 && w > 0 && h > 0) {
+            didFitRef.current = true;
+            const size = campus.getPixelSize();
+            const padScale = 1 + CAMPUS_FIT_PAD_FRACTION * 2;
+            const fit = Math.floor(Math.min(w / (size.w * padScale), h / (size.h * padScale)));
+            const fitted = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, fit));
+            panRef.current = { x: 0, y: 0 };
+            if (fitted !== zoom) {
+              onZoomChange(fitted);
+              return; // re-render next frame with the new zoom
             }
           }
 
-          // Ghost preview for drag-to-move
-          if (editorState.isDragMoving && editorState.dragUid && editorState.ghostCol >= 0) {
-            const draggedItem = officeState
-              .getLayout()
-              .furniture.find((f) => f.uid === editorState.dragUid);
-            if (draggedItem) {
-              const entry = getCatalogEntry(draggedItem.type);
-              if (entry) {
-                const ghostCol = editorState.ghostCol - editorState.dragOffsetCol;
-                const ghostRow = editorState.ghostRow - editorState.dragOffsetRow;
-                editorRender.ghostSprite = entry.sprite;
-                editorRender.ghostCol = ghostCol;
-                editorRender.ghostRow = ghostRow;
-                editorRender.ghostValid = canPlaceFurniture(
-                  officeState.getLayout(),
-                  draggedItem.type,
-                  ghostCol,
-                  ghostRow,
-                  editorState.dragUid,
-                );
-              }
-            }
-          }
-
-          // Selection highlight
-          if (editorState.selectedFurnitureUid && !editorState.isDragMoving) {
-            const item = officeState
-              .getLayout()
-              .furniture.find((f) => f.uid === editorState.selectedFurnitureUid);
-            if (item) {
-              const entry = getCatalogEntry(item.type);
-              if (entry) {
-                editorRender.hasSelection = true;
-                editorRender.selectedCol = item.col;
-                editorRender.selectedRow = item.row;
-                editorRender.selectedW = entry.footprintW;
-                editorRender.selectedH = entry.footprintH;
-                editorRender.isRotatable = isRotatable(item.type);
-              }
-            }
-          }
-        }
-
-        // Camera follow: smoothly center on followed agent
-        if (officeState.cameraFollowId !== null) {
-          const followCh = officeState.characters.get(officeState.cameraFollowId);
-          if (followCh) {
-            const layout = officeState.getLayout();
-            const mapW = layout.cols * TILE_SIZE * zoom;
-            const mapH = layout.rows * TILE_SIZE * zoom;
-            const targetX = mapW / 2 - followCh.x * zoom;
-            const targetY = mapH / 2 - followCh.y * zoom;
+          // Camera follow: smoothly center on followed agent (office-origin aware)
+          const follow = campus.getCameraFollow();
+          if (follow) {
+            const size = campus.getPixelSize();
+            const worldX = follow.entry.originCol * TILE_SIZE + follow.ch.x;
+            const worldY = follow.entry.originRow * TILE_SIZE + follow.ch.y;
+            const targetX = (size.w / 2 - worldX) * zoom;
+            const targetY = (size.h / 2 - worldY) * zoom;
             const dx = targetX - panRef.current.x;
             const dy = targetY - panRef.current.y;
             if (
@@ -232,6 +193,133 @@ export function OfficeCanvas({
                 x: panRef.current.x + dx * CAMERA_FOLLOW_LERP,
                 y: panRef.current.y + dy * CAMERA_FOLLOW_LERP,
               };
+            }
+          }
+
+          ctx.clearRect(0, 0, w, h);
+          const size = campus.getPixelSize();
+          const baseX = Math.floor((w - size.w * zoom) / 2) + Math.round(panRef.current.x);
+          const baseY = Math.floor((h - size.h * zoom) / 2) + Math.round(panRef.current.y);
+          offsetRef.current = { x: baseX, y: baseY };
+
+          if (campus.entries.length > 0) {
+            const layout = campus.getLayout();
+            const officeW = layout.cols * TILE_SIZE * zoom;
+            const officeH = layout.rows * TILE_SIZE * zoom;
+            const pad = CAMPUS_CULL_PAD_PX * zoom;
+            for (const entry of campus.entries) {
+              const ox = baseX + entry.originCol * TILE_SIZE * zoom;
+              const oy = baseY + entry.originRow * TILE_SIZE * zoom;
+              // Cull offices fully outside the viewport
+              if (
+                ox + officeW + pad < 0 ||
+                ox - pad > w ||
+                oy + officeH + pad < 0 ||
+                oy - pad > h
+              ) {
+                continue;
+              }
+              renderOffice(ctx, entry.office, ox, oy, zoom);
+              const count = campus.agentCount(entry.office);
+              renderOfficeLabel(
+                ctx,
+                `${entry.workspace.name} · ${count}`,
+                count === 0,
+                ox,
+                oy,
+                zoom,
+                officeW,
+              );
+            }
+          }
+
+          deleteButtonBoundsRef.current = null;
+          rotateButtonBoundsRef.current = null;
+          return;
+        }
+
+        // ── Edit mode: render only the active office at origin 0 ──
+        // Build editor render state
+        const showGhostBorder =
+          editorState.activeTool === EditTool.TILE_PAINT ||
+          editorState.activeTool === EditTool.WALL_PAINT ||
+          editorState.activeTool === EditTool.ERASE;
+        const editorRender: EditorRenderState = {
+          showGrid: true,
+          ghostSprite: null,
+          ghostCol: editorState.ghostCol,
+          ghostRow: editorState.ghostRow,
+          ghostValid: editorState.ghostValid,
+          selectedCol: 0,
+          selectedRow: 0,
+          selectedW: 0,
+          selectedH: 0,
+          hasSelection: false,
+          isRotatable: false,
+          deleteButtonBounds: null,
+          rotateButtonBounds: null,
+          showGhostBorder,
+          ghostBorderHoverCol: showGhostBorder ? editorState.ghostCol : -999,
+          ghostBorderHoverRow: showGhostBorder ? editorState.ghostRow : -999,
+        };
+
+        // Ghost preview for furniture placement
+        if (editorState.activeTool === EditTool.FURNITURE_PLACE && editorState.ghostCol >= 0) {
+          const entry = getCatalogEntry(editorState.selectedFurnitureType);
+          if (entry) {
+            const placementRow = getWallPlacementRow(
+              editorState.selectedFurnitureType,
+              editorState.ghostRow,
+            );
+            editorRender.ghostSprite = entry.sprite;
+            editorRender.ghostRow = placementRow;
+            editorRender.ghostValid = canPlaceFurniture(
+              officeState.getLayout(),
+              editorState.selectedFurnitureType,
+              editorState.ghostCol,
+              placementRow,
+            );
+          }
+        }
+
+        // Ghost preview for drag-to-move
+        if (editorState.isDragMoving && editorState.dragUid && editorState.ghostCol >= 0) {
+          const draggedItem = officeState
+            .getLayout()
+            .furniture.find((f) => f.uid === editorState.dragUid);
+          if (draggedItem) {
+            const entry = getCatalogEntry(draggedItem.type);
+            if (entry) {
+              const ghostCol = editorState.ghostCol - editorState.dragOffsetCol;
+              const ghostRow = editorState.ghostRow - editorState.dragOffsetRow;
+              editorRender.ghostSprite = entry.sprite;
+              editorRender.ghostCol = ghostCol;
+              editorRender.ghostRow = ghostRow;
+              editorRender.ghostValid = canPlaceFurniture(
+                officeState.getLayout(),
+                draggedItem.type,
+                ghostCol,
+                ghostRow,
+                editorState.dragUid,
+              );
+            }
+          }
+        }
+
+        // Selection highlight
+        if (editorState.selectedFurnitureUid && !editorState.isDragMoving) {
+          const item = officeState
+            .getLayout()
+            .furniture.find((f) => f.uid === editorState.selectedFurnitureUid);
+          if (item) {
+            const entry = getCatalogEntry(item.type);
+            if (entry) {
+              editorRender.hasSelection = true;
+              editorRender.selectedCol = item.col;
+              editorRender.selectedRow = item.row;
+              editorRender.selectedW = entry.footprintW;
+              editorRender.selectedH = entry.footprintH;
+              editorRender.isRotatable = isRotatable(item.type);
             }
           }
         }
@@ -264,8 +352,8 @@ export function OfficeCanvas({
         offsetRef.current = { x: offsetX, y: offsetY };
 
         // Store delete/rotate button bounds for hit-testing
-        deleteButtonBoundsRef.current = editorRender?.deleteButtonBounds ?? null;
-        rotateButtonBoundsRef.current = editorRender?.rotateButtonBounds ?? null;
+        deleteButtonBoundsRef.current = editorRender.deleteButtonBounds;
+        rotateButtonBoundsRef.current = editorRender.rotateButtonBounds;
       },
     });
 
@@ -273,7 +361,7 @@ export function OfficeCanvas({
       stop();
       observer.disconnect();
     };
-  }, [officeState, resizeCanvas, isEditMode, editorState, zoom, panRef]);
+  }, [campus, officeState, resizeCanvas, isEditMode, editorState, zoom, panRef, onZoomChange]);
 
   // Convert CSS mouse coords to world (sprite pixel) coords
   const screenToWorld = useCallback(
@@ -294,6 +382,28 @@ export function OfficeCanvas({
       return { worldX, worldY, screenX: cssX, screenY: cssY, deviceX, deviceY };
     },
     [zoom],
+  );
+
+  /** Campus-mode: which office (if any) contains a world point, plus local coords. */
+  const campusHitTest = useCallback(
+    (worldX: number, worldY: number): CampusHit | null => {
+      const entry = campus.getEntryAt(worldX, worldY);
+      if (!entry) return null;
+      const origin = campus.originPx(entry);
+      const localX = worldX - origin.x;
+      const localY = worldY - origin.y;
+      return {
+        office: entry.office,
+        workspace: entry.workspace,
+        originX: origin.x,
+        originY: origin.y,
+        localX,
+        localY,
+        col: Math.floor(localX / TILE_SIZE),
+        row: Math.floor(localY / TILE_SIZE),
+      };
+    },
+    [campus],
   );
 
   const screenToTile = useCallback(
@@ -447,37 +557,42 @@ export function OfficeCanvas({
         return;
       }
 
+      // ── Campus mode: hover within the office under the cursor ──
       const pos = screenToWorld(e.clientX, e.clientY);
       if (!pos) return;
-      const hitId = officeState.getCharacterAt(pos.worldX, pos.worldY);
-      const tile = screenToTile(e.clientX, e.clientY);
-      officeState.hoveredTile = tile;
-      const canvas = canvasRef.current;
-      if (canvas) {
-        let cursor = 'default';
+      const hit = campusHitTest(pos.worldX, pos.worldY);
+      campus.clearHoverExcept(hit?.office ?? null);
+      let cursor = 'default';
+      if (hit) {
+        const office = hit.office;
+        const hitId = office.getCharacterAt(hit.localX, hit.localY);
+        office.hoveredAgentId = hitId;
+        office.hoveredTile = { col: hit.col, row: hit.row };
         if (hitId !== null) {
           cursor = 'pointer';
-        } else if (officeState.selectedAgentId !== null && tile) {
+        } else if (office.selectedAgentId !== null) {
           // Check if hovering over a clickable seat (available or own)
-          const seatId = officeState.getSeatAtTile(tile.col, tile.row);
+          const seatId = office.getSeatAtTile(hit.col, hit.row);
           if (seatId) {
-            const seat = officeState.seats.get(seatId);
+            const seat = office.seats.get(seatId);
             if (seat) {
-              const selectedCh = officeState.characters.get(officeState.selectedAgentId);
+              const selectedCh = office.characters.get(office.selectedAgentId);
               if (!seat.assigned || (selectedCh && selectedCh.seatId === seatId)) {
                 cursor = 'pointer';
               }
             }
           }
         }
-        canvas.style.cursor = cursor;
       }
-      officeState.hoveredAgentId = hitId;
+      const canvas = canvasRef.current;
+      if (canvas) canvas.style.cursor = cursor;
     },
     [
+      campus,
       officeState,
       screenToWorld,
       screenToTile,
+      campusHitTest,
       isEditMode,
       editorState,
       onEditorTileAction,
@@ -496,7 +611,7 @@ export function OfficeCanvas({
       if (e.button === 1) {
         e.preventDefault();
         // Break camera follow on manual pan
-        officeState.cameraFollowId = null;
+        campus.clearCameraFollow();
         isPanningRef.current = true;
         panStartRef.current = {
           mouseX: e.clientX,
@@ -587,6 +702,7 @@ export function OfficeCanvas({
       }
     },
     [
+      campus,
       officeState,
       isEditMode,
       editorState,
@@ -665,58 +781,79 @@ export function OfficeCanvas({
       const pos = screenToWorld(e.clientX, e.clientY);
       if (!pos) return;
 
-      const hitId = officeState.getCharacterAt(pos.worldX, pos.worldY);
-      if (hitId !== null) {
-        // Dismiss any active bubble on click
-        officeState.dismissBubble(hitId);
-        // Toggle selection: click same agent deselects, different agent selects
-        if (officeState.selectedAgentId === hitId) {
-          officeState.selectedAgentId = null;
-          officeState.cameraFollowId = null;
-        } else {
-          officeState.selectedAgentId = hitId;
-          officeState.cameraFollowId = hitId;
-        }
-        onClick(hitId); // still focus terminal
+      const hit = campusHitTest(pos.worldX, pos.worldY);
+      if (!hit) {
+        // Empty canvas — deselect everywhere and close popups
+        campus.clearSelectionsExcept(null);
+        onEmptyClick();
         return;
       }
 
-      // No agent hit — check seat click while agent is selected
-      if (officeState.selectedAgentId !== null) {
-        const selectedCh = officeState.characters.get(officeState.selectedAgentId);
+      // Remember the last-clicked workspace (edit-mode target)
+      campus.activeWorkspacePath = hit.workspace.path;
+      const office = hit.office;
+
+      const hitId = office.getCharacterAt(hit.localX, hit.localY);
+      if (hitId !== null) {
+        onEmptyClick(); // close any open popup
+        // Dismiss any active bubble on click
+        office.dismissBubble(hitId);
+        // Toggle selection: click same agent deselects, different agent selects
+        if (office.selectedAgentId === hitId) {
+          office.selectedAgentId = null;
+          office.cameraFollowId = null;
+        } else {
+          campus.clearSelectionsExcept(office);
+          office.selectedAgentId = hitId;
+          office.cameraFollowId = hitId;
+        }
+        onClick(hitId, office); // still focus terminal
+        return;
+      }
+
+      // No agent hit — check seat click while an agent in THIS office is selected
+      if (office.selectedAgentId !== null) {
+        const selectedCh = office.characters.get(office.selectedAgentId);
         // Skip seat reassignment for sub-agents
         if (selectedCh && !selectedCh.isSubagent) {
-          const tile = screenToTile(e.clientX, e.clientY);
-          if (tile) {
-            const seatId = officeState.getSeatAtTile(tile.col, tile.row);
-            if (seatId) {
-              const seat = officeState.seats.get(seatId);
-              if (seat && selectedCh) {
-                if (selectedCh.seatId === seatId) {
-                  // Clicked own seat — send agent back to it
-                  officeState.sendToSeat(officeState.selectedAgentId);
-                  officeState.selectedAgentId = null;
-                  officeState.cameraFollowId = null;
-                  return;
-                } else if (!seat.assigned) {
-                  // Clicked available seat — reassign
-                  officeState.reassignSeat(officeState.selectedAgentId, seatId);
-                  officeState.selectedAgentId = null;
-                  officeState.cameraFollowId = null;
-                  // Persist seat assignments (exclude sub-agents)
-                  saveAgentSeats(officeState);
-                  return;
-                }
+          const seatId = office.getSeatAtTile(hit.col, hit.row);
+          if (seatId) {
+            const seat = office.seats.get(seatId);
+            if (seat) {
+              if (selectedCh.seatId === seatId) {
+                // Clicked own seat — send agent back to it
+                office.sendToSeat(office.selectedAgentId);
+                office.selectedAgentId = null;
+                office.cameraFollowId = null;
+                return;
+              } else if (!seat.assigned) {
+                // Clicked available seat — reassign
+                office.reassignSeat(office.selectedAgentId, seatId);
+                office.selectedAgentId = null;
+                office.cameraFollowId = null;
+                // Persist seat assignments (exclude sub-agents)
+                saveAgentSeats(campus);
+                return;
               }
             }
           }
         }
-        // Clicked empty space — deselect
-        officeState.selectedAgentId = null;
-        officeState.cameraFollowId = null;
+        // Clicked empty floor with a selection — just deselect
+        office.selectedAgentId = null;
+        office.cameraFollowId = null;
+        return;
       }
+
+      if (campus.getSelectedAgentId() !== null) {
+        // Selection lives in another office — deselect everywhere
+        campus.clearSelectionsExcept(null);
+        return;
+      }
+
+      // Nothing hit, nothing selected — open the workspace action popup
+      onOfficeClick(hit.workspace, pos.screenX, pos.screenY);
     },
-    [officeState, onClick, screenToWorld, screenToTile, isEditMode],
+    [campus, onClick, onOfficeClick, onEmptyClick, screenToWorld, campusHitTest, isEditMode],
   );
 
   const handleMouseLeave = useCallback(() => {
@@ -727,23 +864,28 @@ export function OfficeCanvas({
     editorState.clearDrag();
     editorState.ghostCol = -1;
     editorState.ghostRow = -1;
-    officeState.hoveredAgentId = null;
-    officeState.hoveredTile = null;
-  }, [officeState, editorState]);
+    campus.clearHoverExcept(null);
+  }, [campus, editorState]);
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
       if (isEditMode) return;
-      // Right-click to walk selected agent to tile
-      if (officeState.selectedAgentId !== null) {
-        const tile = screenToTile(e.clientX, e.clientY);
-        if (tile) {
-          officeState.walkToTile(officeState.selectedAgentId, tile.col, tile.row);
-        }
-      }
+      // Right-click to walk selected agent to a tile in its own office
+      const selectedId = campus.getSelectedAgentId();
+      if (selectedId === null) return;
+      const entry = campus.getEntryForAgent(selectedId);
+      if (!entry) return;
+      const pos = screenToWorld(e.clientX, e.clientY);
+      if (!pos) return;
+      const origin = campus.originPx(entry);
+      const col = Math.floor((pos.worldX - origin.x) / TILE_SIZE);
+      const row = Math.floor((pos.worldY - origin.y) / TILE_SIZE);
+      const layout = entry.office.getLayout();
+      if (col < 0 || col >= layout.cols || row < 0 || row >= layout.rows) return;
+      entry.office.walkToTile(selectedId, col, row);
     },
-    [isEditMode, officeState, screenToTile],
+    [isEditMode, campus, screenToWorld],
   );
 
   // Wheel: Ctrl+wheel to zoom, plain wheel/trackpad to pan
@@ -764,14 +906,14 @@ export function OfficeCanvas({
       } else {
         // Pan via trackpad two-finger scroll or mouse wheel
         const dpr = window.devicePixelRatio || 1;
-        officeState.cameraFollowId = null;
+        campus.clearCameraFollow();
         panRef.current = clampPan(
           panRef.current.x - e.deltaX * dpr,
           panRef.current.y - e.deltaY * dpr,
         );
       }
     },
-    [zoom, onZoomChange, officeState, panRef, clampPan],
+    [zoom, onZoomChange, campus, panRef, clampPan],
   );
 
   // Prevent default middle-click browser behavior (auto-scroll)

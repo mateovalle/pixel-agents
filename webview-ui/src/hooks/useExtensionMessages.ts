@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 
-import type { HostToWebviewMessage } from '../../../shared/protocol.js';
+import type { HostToWebviewMessage, WorkspaceInfo } from '../../../shared/protocol.js';
 import { playDoneSound, setSoundEnabled } from '../notificationSound.js';
-import type { OfficeState } from '../office/engine/officeState.js';
+import type { CampusState } from '../office/engine/campusState.js';
 import { setFloorSprites } from '../office/floorTiles.js';
 import { buildDynamicCatalog } from '../office/layout/furnitureCatalog.js';
 import { migrateLayoutColors } from '../office/layout/layoutSerializer.js';
@@ -52,19 +52,23 @@ export interface ExtensionMessageState {
   layoutReady: boolean;
   loadedAssets?: { catalog: FurnitureAsset[]; sprites: Record<string, string[][]> };
   workspaceFolders: WorkspaceFolder[];
+  workspaces: WorkspaceInfo[];
 }
 
-export function saveAgentSeats(os: OfficeState): void {
+/** Aggregate seat assignments across every office on the campus and persist. */
+export function saveAgentSeats(campus: CampusState): void {
   const seats: Record<number, { palette: number; hueShift: number; seatId: string | null }> = {};
-  for (const ch of os.characters.values()) {
-    if (ch.isSubagent) continue;
-    seats[ch.id] = { palette: ch.palette, hueShift: ch.hueShift, seatId: ch.seatId };
+  for (const office of campus.getAllOffices()) {
+    for (const ch of office.characters.values()) {
+      if (ch.isSubagent) continue;
+      seats[ch.id] = { palette: ch.palette, hueShift: ch.hueShift, seatId: ch.seatId };
+    }
   }
   vscode.postMessage({ type: 'saveAgentSeats', seats });
 }
 
 export function useExtensionMessages(
-  getOfficeState: () => OfficeState,
+  campus: CampusState,
   onLayoutLoaded?: (layout: OfficeLayout) => void,
   isEditDirty?: () => boolean,
 ): ExtensionMessageState {
@@ -81,6 +85,7 @@ export function useExtensionMessages(
     { catalog: FurnitureAsset[]; sprites: Record<string, string[][]> } | undefined
   >();
   const [workspaceFolders, setWorkspaceFolders] = useState<WorkspaceFolder[]>([]);
+  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
 
   // Track whether initial layout has been loaded (ref to avoid re-render)
   const layoutReadyRef = useRef(false);
@@ -95,18 +100,30 @@ export function useExtensionMessages(
   });
 
   useEffect(() => {
-    // Buffer agents from existingAgents until layout is loaded
+    // Buffer agents until both the layout and the workspace list have loaded,
+    // so each agent lands in its workspace's office with correct seats.
     let pendingAgents: Array<{
       id: number;
       palette?: number;
       hueShift?: number;
       seatId?: string;
       folderName?: string;
+      workspacePath?: string;
     }> = [];
+    let workspacesLoaded = false;
+
+    const flushPendingAgents = () => {
+      if (!layoutReadyRef.current || !workspacesLoaded || pendingAgents.length === 0) return;
+      for (const p of pendingAgents) {
+        const office = campus.routeOffice(p.workspacePath, p.folderName);
+        office.addAgent(p.id, p.palette, p.hueShift, p.seatId, true, p.folderName);
+      }
+      pendingAgents = [];
+      saveAgentSeats(campus);
+    };
 
     const handler = (e: MessageEvent) => {
       const msg = e.data as HostToWebviewMessage;
-      const os = getOfficeState();
 
       if (msg.type === 'layoutLoaded') {
         // Skip external layout updates while editor has unsaved changes
@@ -117,31 +134,36 @@ export function useExtensionMessages(
         const rawLayout = msg.layout as OfficeLayout | null;
         const layout = rawLayout && rawLayout.version === 1 ? migrateLayoutColors(rawLayout) : null;
         if (layout) {
-          os.rebuildFromLayout(layout);
+          campus.setLayout(layout);
           onLayoutLoadedRef.current?.(layout);
         } else {
-          // Default layout — snapshot whatever OfficeState built
-          onLayoutLoadedRef.current?.(os.getLayout());
+          // Default layout — adopt whatever the active OfficeState built
+          campus.adoptLayoutFromActive();
+          onLayoutLoadedRef.current?.(campus.getLayout());
         }
-        // Add buffered agents now that layout (and seats) are correct
-        for (const p of pendingAgents) {
-          os.addAgent(p.id, p.palette, p.hueShift, p.seatId, true, p.folderName);
-        }
-        pendingAgents = [];
         layoutReadyRef.current = true;
         setLayoutReady(true);
-        if (os.characters.size > 0) {
-          saveAgentSeats(os);
-        }
+        // Add buffered agents now that layout (and seats) are correct
+        flushPendingAgents();
+      } else if (msg.type === 'workspacesLoaded') {
+        campus.syncWorkspaces(msg.workspaces);
+        workspacesLoaded = true;
+        setWorkspaces(msg.workspaces);
+        flushPendingAgents();
       } else if (msg.type === 'agentCreated') {
-        const id = msg.id as number;
-        const folderName = msg.folderName as string | undefined;
+        const id = msg.id;
+        const folderName = msg.folderName;
         setAgents((prev) => (prev.includes(id) ? prev : [...prev, id]));
         setSelectedAgent(id);
-        os.addAgent(id, undefined, undefined, undefined, undefined, folderName);
-        saveAgentSeats(os);
+        if (!layoutReadyRef.current || !workspacesLoaded) {
+          pendingAgents.push({ id, folderName, workspacePath: msg.workspacePath });
+        } else {
+          const office = campus.routeOffice(msg.workspacePath, folderName);
+          office.addAgent(id, undefined, undefined, undefined, undefined, folderName);
+          saveAgentSeats(campus);
+        }
       } else if (msg.type === 'agentClosed') {
-        const id = msg.id as number;
+        const id = msg.id;
         setAgents((prev) => prev.filter((a) => a !== id));
         setSelectedAgent((prev) => (prev === id ? null : prev));
         setAgentTools((prev) => {
@@ -162,25 +184,24 @@ export function useExtensionMessages(
           delete next[id];
           return next;
         });
+        pendingAgents = pendingAgents.filter((p) => p.id !== id);
         // Remove all sub-agent characters belonging to this agent
-        os.removeAllSubagents(id);
+        const os = campus.getOfficeForAgent(id);
+        os?.removeAllSubagents(id);
         setSubagentCharacters((prev) => prev.filter((s) => s.parentAgentId !== id));
-        os.removeAgent(id);
+        os?.removeAgent(id);
       } else if (msg.type === 'existingAgents') {
-        const incoming = msg.agents as number[];
-        const meta = (msg.agentMeta || {}) as Record<
-          number,
-          { palette?: number; hueShift?: number; seatId?: string }
-        >;
-        const folderNames = (msg.folderNames || {}) as Record<number, string>;
-        // Buffer agents — they'll be added in layoutLoaded after seats are built
+        const incoming = msg.agents;
+        const meta = msg.agentMeta || {};
+        const folderNames = msg.folderNames || {};
+        // Buffer agents — they'll be routed once layout + workspaces are ready
         for (const id of incoming) {
           const m = meta[id];
           pendingAgents.push({
             id,
             palette: m?.palette,
             hueShift: m?.hueShift,
-            seatId: m?.seatId,
+            seatId: m?.seatId ?? undefined,
             folderName: folderNames[id],
           });
         }
@@ -194,31 +215,35 @@ export function useExtensionMessages(
           }
           return merged.sort((a, b) => a - b);
         });
+        flushPendingAgents();
       } else if (msg.type === 'agentToolStart') {
-        const id = msg.id as number;
-        const toolId = msg.toolId as string;
-        const status = msg.status as string;
+        const id = msg.id;
+        const toolId = msg.toolId;
+        const status = msg.status;
         setAgentTools((prev) => {
           const list = prev[id] || [];
           if (list.some((t) => t.toolId === toolId)) return prev;
           return { ...prev, [id]: [...list, { toolId, status, done: false }] };
         });
-        const toolName = extractToolName(status);
-        os.setAgentTool(id, toolName);
-        os.setAgentActive(id, true);
-        os.clearPermissionBubble(id);
-        // Create sub-agent character for Task tool subtasks
-        if (status.startsWith('Subtask:')) {
-          const label = status.slice('Subtask:'.length).trim();
-          const subId = os.addSubagent(id, toolId);
-          setSubagentCharacters((prev) => {
-            if (prev.some((s) => s.id === subId)) return prev;
-            return [...prev, { id: subId, parentAgentId: id, parentToolId: toolId, label }];
-          });
+        const os = campus.getOfficeForAgent(id);
+        if (os) {
+          const toolName = extractToolName(status);
+          os.setAgentTool(id, toolName);
+          os.setAgentActive(id, true);
+          os.clearPermissionBubble(id);
+          // Create sub-agent character for Task tool subtasks
+          if (status.startsWith('Subtask:')) {
+            const label = status.slice('Subtask:'.length).trim();
+            const subId = os.addSubagent(id, toolId);
+            setSubagentCharacters((prev) => {
+              if (prev.some((s) => s.id === subId)) return prev;
+              return [...prev, { id: subId, parentAgentId: id, parentToolId: toolId, label }];
+            });
+          }
         }
       } else if (msg.type === 'agentToolDone') {
-        const id = msg.id as number;
-        const toolId = msg.toolId as string;
+        const id = msg.id;
+        const toolId = msg.toolId;
         setAgentTools((prev) => {
           const list = prev[id];
           if (!list) return prev;
@@ -228,7 +253,7 @@ export function useExtensionMessages(
           };
         });
       } else if (msg.type === 'agentToolsClear') {
-        const id = msg.id as number;
+        const id = msg.id;
         setAgentTools((prev) => {
           if (!(id in prev)) return prev;
           const next = { ...prev };
@@ -242,16 +267,16 @@ export function useExtensionMessages(
           return next;
         });
         // Remove all sub-agent characters belonging to this agent
-        os.removeAllSubagents(id);
+        const os = campus.getOfficeForAgent(id);
+        os?.removeAllSubagents(id);
         setSubagentCharacters((prev) => prev.filter((s) => s.parentAgentId !== id));
-        os.setAgentTool(id, null);
-        os.clearPermissionBubble(id);
+        os?.setAgentTool(id, null);
+        os?.clearPermissionBubble(id);
       } else if (msg.type === 'agentSelected') {
-        const id = msg.id as number;
-        setSelectedAgent(id);
+        setSelectedAgent(msg.id);
       } else if (msg.type === 'agentStatus') {
-        const id = msg.id as number;
-        const status = msg.status as string;
+        const id = msg.id;
+        const status = msg.status;
         setAgentStatuses((prev) => {
           if (status === 'active') {
             if (!(id in prev)) return prev;
@@ -261,13 +286,14 @@ export function useExtensionMessages(
           }
           return { ...prev, [id]: status };
         });
-        os.setAgentActive(id, status === 'active');
+        const os = campus.getOfficeForAgent(id);
+        os?.setAgentActive(id, status === 'active');
         if (status === 'waiting') {
-          os.showWaitingBubble(id);
+          os?.showWaitingBubble(id);
           playDoneSound();
         }
       } else if (msg.type === 'agentToolPermission') {
-        const id = msg.id as number;
+        const id = msg.id;
         setAgentTools((prev) => {
           const list = prev[id];
           if (!list) return prev;
@@ -276,17 +302,18 @@ export function useExtensionMessages(
             [id]: list.map((t) => (t.done ? t : { ...t, permissionWait: true })),
           };
         });
-        os.showPermissionBubble(id);
+        campus.getOfficeForAgent(id)?.showPermissionBubble(id);
       } else if (msg.type === 'subagentToolPermission') {
-        const id = msg.id as number;
-        const parentToolId = msg.parentToolId as string;
+        const id = msg.id;
+        const parentToolId = msg.parentToolId;
         // Show permission bubble on the sub-agent character
-        const subId = os.getSubagentId(id, parentToolId);
-        if (subId !== null) {
+        const os = campus.getOfficeForAgent(id);
+        const subId = os?.getSubagentId(id, parentToolId) ?? null;
+        if (os && subId !== null) {
           os.showPermissionBubble(subId);
         }
       } else if (msg.type === 'agentToolPermissionClear') {
-        const id = msg.id as number;
+        const id = msg.id;
         setAgentTools((prev) => {
           const list = prev[id];
           if (!list) return prev;
@@ -297,18 +324,21 @@ export function useExtensionMessages(
             [id]: list.map((t) => (t.permissionWait ? { ...t, permissionWait: false } : t)),
           };
         });
-        os.clearPermissionBubble(id);
-        // Also clear permission bubbles on all sub-agent characters of this parent
-        for (const [subId, meta] of os.subagentMeta) {
-          if (meta.parentAgentId === id) {
-            os.clearPermissionBubble(subId);
+        const os = campus.getOfficeForAgent(id);
+        if (os) {
+          os.clearPermissionBubble(id);
+          // Also clear permission bubbles on all sub-agent characters of this parent
+          for (const [subId, meta] of os.subagentMeta) {
+            if (meta.parentAgentId === id) {
+              os.clearPermissionBubble(subId);
+            }
           }
         }
       } else if (msg.type === 'subagentToolStart') {
-        const id = msg.id as number;
-        const parentToolId = msg.parentToolId as string;
-        const toolId = msg.toolId as string;
-        const status = msg.status as string;
+        const id = msg.id;
+        const parentToolId = msg.parentToolId;
+        const toolId = msg.toolId;
+        const status = msg.status;
         setSubagentTools((prev) => {
           const agentSubs = prev[id] || {};
           const list = agentSubs[parentToolId] || [];
@@ -319,16 +349,17 @@ export function useExtensionMessages(
           };
         });
         // Update sub-agent character's tool and active state
-        const subId = os.getSubagentId(id, parentToolId);
-        if (subId !== null) {
+        const os = campus.getOfficeForAgent(id);
+        const subId = os?.getSubagentId(id, parentToolId) ?? null;
+        if (os && subId !== null) {
           const subToolName = extractToolName(status);
           os.setAgentTool(subId, subToolName);
           os.setAgentActive(subId, true);
         }
       } else if (msg.type === 'subagentToolDone') {
-        const id = msg.id as number;
-        const parentToolId = msg.parentToolId as string;
-        const toolId = msg.toolId as string;
+        const id = msg.id;
+        const parentToolId = msg.parentToolId;
+        const toolId = msg.toolId;
         setSubagentTools((prev) => {
           const agentSubs = prev[id];
           if (!agentSubs) return prev;
@@ -343,8 +374,8 @@ export function useExtensionMessages(
           };
         });
       } else if (msg.type === 'subagentClear') {
-        const id = msg.id as number;
-        const parentToolId = msg.parentToolId as string;
+        const id = msg.id;
+        const parentToolId = msg.parentToolId;
         setSubagentTools((prev) => {
           const agentSubs = prev[id];
           if (!agentSubs || !(parentToolId in agentSubs)) return prev;
@@ -358,7 +389,7 @@ export function useExtensionMessages(
           return { ...prev, [id]: next };
         });
         // Remove sub-agent character
-        os.removeSubagent(id, parentToolId);
+        campus.getOfficeForAgent(id)?.removeSubagent(id, parentToolId);
         setSubagentCharacters((prev) =>
           prev.filter((s) => !(s.parentAgentId === id && s.parentToolId === parentToolId)),
         );
@@ -379,11 +410,9 @@ export function useExtensionMessages(
         console.log(`[Webview] Received ${sprites.length} wall tile sprites`);
         setWallSprites(sprites);
       } else if (msg.type === 'workspaceFolders') {
-        const folders = msg.folders as WorkspaceFolder[];
-        setWorkspaceFolders(folders);
+        setWorkspaceFolders(msg.folders);
       } else if (msg.type === 'settingsLoaded') {
-        const soundOn = msg.soundEnabled as boolean;
-        setSoundEnabled(soundOn);
+        setSoundEnabled(msg.soundEnabled);
       } else if (msg.type === 'furnitureAssetsLoaded') {
         try {
           const catalog = msg.catalog as FurnitureAsset[];
@@ -400,7 +429,7 @@ export function useExtensionMessages(
     window.addEventListener('message', handler);
     vscode.postMessage({ type: 'webviewReady' });
     return () => window.removeEventListener('message', handler);
-  }, [getOfficeState]);
+  }, [campus]);
 
   return {
     agents,
@@ -412,5 +441,6 @@ export function useExtensionMessages(
     layoutReady,
     loadedAssets,
     workspaceFolders,
+    workspaces,
   };
 }

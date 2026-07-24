@@ -42,6 +42,11 @@ import {
 } from '../src/core/types.js';
 import { type ChatSession, startChatSession } from './chatAgent.js';
 import { recordTurnUsage, summarizeUsage } from './usage.js';
+import {
+  loadWorkspaces,
+  removeWorkspace as removeWorkspaceEntry,
+  touchWorkspace,
+} from './workspaces.js';
 
 // ── Electron-specific constants ──────────────────────────────
 const PTY_SCROLLBACK_MAX_CHARS = 200_000;
@@ -305,7 +310,9 @@ function launchAgent(cwd: string): void {
     ptyId,
     agentKind: 'terminal',
     folderName: path.basename(cwd),
+    workspacePath: cwd,
   });
+  ctx.send({ type: 'workspacesLoaded', workspaces: touchWorkspace(cwd) });
   ensureProjectScan(agent.projectDir);
 }
 
@@ -342,7 +349,9 @@ function launchChatAgent(cwd: string, resumeSessionId?: string): void {
     id: agent.id,
     agentKind: 'chat',
     folderName: path.basename(cwd),
+    workspacePath: cwd,
   });
+  ctx.send({ type: 'workspacesLoaded', workspaces: touchWorkspace(cwd) });
 }
 
 /** Poll until the agent's JSONL file appears, then start watching it. */
@@ -671,11 +680,20 @@ function handleWebviewMessage(msg: WebviewToHostMessage): void {
     chatSessions.get(msg.id)?.setMode(msg.mode);
   } else if (msg.type === 'listResumableSessions') {
     void (async () => {
-      const cwd = await resolveAgentCwd(undefined);
+      const cwd = await resolveAgentCwd(msg.folderPath);
       if (cwd) {
         ctx.send({ type: 'sessionList', folderPath: cwd, sessions: listResumableSessions(cwd) });
       }
     })();
+  } else if (msg.type === 'addWorkspace') {
+    void (async () => {
+      const cwd = await resolveAgentCwd(undefined);
+      if (cwd) {
+        ctx.send({ type: 'workspacesLoaded', workspaces: touchWorkspace(cwd) });
+      }
+    })();
+  } else if (msg.type === 'removeWorkspace') {
+    ctx.send({ type: 'workspacesLoaded', workspaces: removeWorkspaceEntry(msg.path) });
   } else if (msg.type === 'resumeChatAgent') {
     launchChatAgent(msg.folderPath, msg.sessionId);
   } else if (msg.type === 'saveLayout') {
@@ -774,6 +792,9 @@ function onWebviewReady(): void {
 
   // Send settings
   ctx.send({ type: 'settingsLoaded', soundEnabled: loadSettings().soundEnabled });
+
+  // Send registered workspaces (offices)
+  ctx.send({ type: 'workspacesLoaded', workspaces: loadWorkspaces() });
 
   // Re-send current agent statuses
   for (const [agentId, agent] of ctx.agents) {

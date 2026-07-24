@@ -72,6 +72,15 @@ export type ChatEvent =
   | { kind: 'status'; text: string }
   | { kind: 'error'; message: string };
 
+/** A registered workspace (project folder) — rendered as an office. */
+export interface WorkspaceInfo {
+  path: string;
+  /** basename(path) unless renamed. */
+  name: string;
+  addedAt: number;
+  lastUsedAt: number;
+}
+
 /** An image attached to a chat prompt (base64, no data: prefix). */
 export interface ChatImageAttachment {
   /** 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' */
@@ -121,6 +130,8 @@ export type HostToWebviewMessage =
       folderName?: string;
       ptyId?: string;
       agentKind?: 'terminal' | 'chat';
+      /** Absolute project folder this agent works in (its workspace/office). */
+      workspacePath?: string;
     }
   | { type: 'agentClosed'; id: number }
   | { type: 'agentSelected'; id: number }
@@ -183,6 +194,8 @@ export type HostToWebviewMessage =
     }
   /** The request was resolved elsewhere (abort/turn end) — remove the card. */
   | { type: 'chat-permission-resolved'; agentId: number; requestId: string }
+  /** Registered workspaces (sent on ready and after add/remove/use). */
+  | { type: 'workspacesLoaded'; workspaces: WorkspaceInfo[] }
   /** Current permission mode of a chat session (sent on init and change). */
   | { type: 'chat-mode'; agentId: number; mode: ChatPermissionMode }
   /** Resumable sessions for a folder the user picked (reply to listResumableSessions). */
@@ -224,7 +237,10 @@ export type WebviewToHostMessage =
   | { type: 'getUsageSummary' }
   /** Switch a chat session's permission mode (host echoes 'chat-mode'). */
   | { type: 'chatSetPermissionMode'; id: number; mode: ChatPermissionMode }
-  /** Pick a folder and list its resumable sessions (host replies 'sessionList'). */
-  | { type: 'listResumableSessions' }
+  /** List resumable sessions (host replies 'sessionList'); shows a folder picker when folderPath is omitted. */
+  | { type: 'listResumableSessions'; folderPath?: string }
+  /** Register a new workspace via folder picker (host replies 'workspacesLoaded'). */
+  | { type: 'addWorkspace' }
+  | { type: 'removeWorkspace'; path: string }
   /** Resume a past session as a new chat agent. */
   | { type: 'resumeChatAgent'; folderPath: string; sessionId: string };

@@ -127,6 +127,35 @@ export const SECONDS_PER_MINUTE = 60;
 export const MINUTES_PER_HOUR = 60;
 export const HOURS_PER_DAY = 24;
 
+// ── Campus ───────────────────────────────────────────────────
+/** Gap between offices in tiles (both axes) */
+export const CAMPUS_GAP_TILES = 4;
+/** Number of office columns in the campus grid */
+export const CAMPUS_GRID_COLS = 3;
+/** Extra sprite-px padding around an office when culling (walls + label overhang) */
+export const CAMPUS_CULL_PAD_PX = 48;
+/** Label plate: distance above the office top edge, in sprite px */
+export const CAMPUS_LABEL_OFFSET_PX = 22;
+/** Label plate font size = zoom * factor, floored at min (device px) */
+export const CAMPUS_LABEL_FONT_ZOOM_FACTOR = 6;
+export const CAMPUS_LABEL_FONT_MIN_PX = 12;
+/** Label plate padding (device px per zoom step) */
+export const CAMPUS_LABEL_PAD_X_FACTOR = 4;
+export const CAMPUS_LABEL_PAD_Y_FACTOR = 2.5;
+export const CAMPUS_LABEL_BORDER_PX = 2;
+export const CAMPUS_LABEL_SHADOW_PX = 2;
+export const CAMPUS_LABEL_BG = '#1e1e2e';
+export const CAMPUS_LABEL_BORDER = '#4a4a6a';
+export const CAMPUS_LABEL_SHADOW = '#0a0a14';
+export const CAMPUS_LABEL_TEXT = 'rgba(255, 255, 255, 0.85)';
+export const CAMPUS_LABEL_TEXT_DIM = 'rgba(255, 255, 255, 0.4)';
+export const CAMPUS_LABEL_FONT_FAMILY = "'FS Pixel Sans', monospace";
+/** Fraction of viewport left as margin when fitting the campus on first load */
+export const CAMPUS_FIT_PAD_FRACTION = 0.05;
+/** Office action popup */
+export const OFFICE_POPUP_WIDTH_PX = 190;
+export const OFFICE_POPUP_MARGIN_PX = 8;
+
 // ── Game Logic ───────────────────────────────────────────────
 export const MAX_DELTA_TIME_SEC = 0.1;
 export const WAITING_BUBBLE_DURATION_SEC = 2.0;

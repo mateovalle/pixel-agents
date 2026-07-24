@@ -179,6 +179,20 @@ export function BottomToolbar({
         )}
       </div>
       <button
+        onClick={() => vscode.postMessage({ type: 'addWorkspace' })}
+        onMouseEnter={() => setHovered('workspace')}
+        onMouseLeave={() => setHovered(null)}
+        style={{
+          ...btnBase,
+          background: hovered === 'workspace' ? 'var(--pixel-btn-hover-bg)' : btnBase.background,
+          border: '2px solid var(--pixel-border)',
+          color: 'var(--pixel-text-dim)',
+        }}
+        title="Register a project folder as a new office"
+      >
+        + Workspace
+      </button>
+      <button
         onClick={onToggleEditMode}
         onMouseEnter={() => setHovered('edit')}
         onMouseLeave={() => setHovered(null)}

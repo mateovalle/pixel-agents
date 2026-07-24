@@ -7,6 +7,19 @@ import {
   BUTTON_LINE_WIDTH_ZOOM_FACTOR,
   BUTTON_MIN_RADIUS,
   BUTTON_RADIUS_ZOOM_FACTOR,
+  CAMPUS_LABEL_BG,
+  CAMPUS_LABEL_BORDER,
+  CAMPUS_LABEL_BORDER_PX,
+  CAMPUS_LABEL_FONT_FAMILY,
+  CAMPUS_LABEL_FONT_MIN_PX,
+  CAMPUS_LABEL_FONT_ZOOM_FACTOR,
+  CAMPUS_LABEL_OFFSET_PX,
+  CAMPUS_LABEL_PAD_X_FACTOR,
+  CAMPUS_LABEL_PAD_Y_FACTOR,
+  CAMPUS_LABEL_SHADOW,
+  CAMPUS_LABEL_SHADOW_PX,
+  CAMPUS_LABEL_TEXT,
+  CAMPUS_LABEL_TEXT_DIM,
   CHARACTER_SITTING_OFFSET_PX,
   CHARACTER_Z_SORT_OFFSET,
   DELETE_BUTTON_BG,
@@ -50,6 +63,7 @@ import { CharacterState, TILE_SIZE, TileType } from '../types.js';
 import { getWallInstances, hasWallSprites, wallColorToHex } from '../wallTiles.js';
 import { getCharacterSprite } from './characters.js';
 import { renderMatrixEffect } from './matrixEffect.js';
+import type { OfficeState } from './officeState.js';
 
 // ── Render functions ────────────────────────────────────────────
 
@@ -535,6 +549,101 @@ export interface SelectionRenderState {
   hoveredTile: { col: number; row: number } | null;
   seats: Map<string, Seat>;
   characters: Map<number, Character>;
+}
+
+/**
+ * Render a single office (tiles, seats, walls, furniture, characters, bubbles)
+ * at an arbitrary device-pixel offset. Used by the campus view to draw every
+ * workspace's office on one shared canvas.
+ */
+export function renderOffice(
+  ctx: CanvasRenderingContext2D,
+  office: OfficeState,
+  offsetX: number,
+  offsetY: number,
+  zoom: number,
+): void {
+  const layout = office.getLayout();
+  renderTileGrid(ctx, office.tileMap, offsetX, offsetY, zoom, layout.tileColors, layout.cols);
+
+  renderSeatIndicators(
+    ctx,
+    office.seats,
+    office.characters,
+    office.selectedAgentId,
+    office.hoveredTile,
+    offsetX,
+    offsetY,
+    zoom,
+  );
+
+  const wallInstances = hasWallSprites()
+    ? getWallInstances(office.tileMap, layout.tileColors, layout.cols)
+    : [];
+  const allFurniture =
+    wallInstances.length > 0 ? [...wallInstances, ...office.furniture] : office.furniture;
+
+  const characters = office.getCharacters();
+  renderScene(
+    ctx,
+    allFurniture,
+    characters,
+    offsetX,
+    offsetY,
+    zoom,
+    office.selectedAgentId,
+    office.hoveredAgentId,
+  );
+
+  renderBubbles(ctx, characters, offsetX, offsetY, zoom);
+}
+
+/**
+ * Draw a pixel-styled label plate centered above an office: solid background,
+ * hard border and offset shadow (no blur), sharp corners.
+ */
+export function renderOfficeLabel(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  dim: boolean,
+  offsetX: number,
+  offsetY: number,
+  zoom: number,
+  officeDeviceWidth: number,
+): void {
+  const fontPx = Math.max(CAMPUS_LABEL_FONT_MIN_PX, zoom * CAMPUS_LABEL_FONT_ZOOM_FACTOR);
+  const padX = Math.max(CAMPUS_LABEL_PAD_X_FACTOR, zoom * CAMPUS_LABEL_PAD_X_FACTOR);
+  const padY = Math.max(CAMPUS_LABEL_PAD_Y_FACTOR, zoom * CAMPUS_LABEL_PAD_Y_FACTOR);
+
+  ctx.save();
+  ctx.font = `${fontPx}px ${CAMPUS_LABEL_FONT_FAMILY}`;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'center';
+
+  const textW = ctx.measureText(text).width;
+  const plateW = Math.round(textW + padX * 2);
+  const plateH = Math.round(fontPx + padY * 2);
+  const plateX = Math.round(offsetX + officeDeviceWidth / 2 - plateW / 2);
+  const plateY = Math.round(offsetY - CAMPUS_LABEL_OFFSET_PX * zoom - plateH);
+
+  ctx.globalAlpha = dim ? 0.6 : 1;
+  // Hard offset shadow
+  ctx.fillStyle = CAMPUS_LABEL_SHADOW;
+  ctx.fillRect(plateX + CAMPUS_LABEL_SHADOW_PX, plateY + CAMPUS_LABEL_SHADOW_PX, plateW, plateH);
+  // Border + background
+  ctx.fillStyle = CAMPUS_LABEL_BORDER;
+  ctx.fillRect(plateX, plateY, plateW, plateH);
+  ctx.fillStyle = CAMPUS_LABEL_BG;
+  ctx.fillRect(
+    plateX + CAMPUS_LABEL_BORDER_PX,
+    plateY + CAMPUS_LABEL_BORDER_PX,
+    plateW - CAMPUS_LABEL_BORDER_PX * 2,
+    plateH - CAMPUS_LABEL_BORDER_PX * 2,
+  );
+  // Text
+  ctx.fillStyle = dim ? CAMPUS_LABEL_TEXT_DIM : CAMPUS_LABEL_TEXT;
+  ctx.fillText(text, plateX + plateW / 2, plateY + plateH / 2 + 1);
+  ctx.restore();
 }
 
 export function renderFrame(
