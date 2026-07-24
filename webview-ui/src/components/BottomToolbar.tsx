@@ -121,26 +121,6 @@ export function BottomToolbar({
           + Agent
         </button>
         <button
-          onClick={() => handleAgentClick('terminal')}
-          onMouseEnter={() => setHovered('terminal')}
-          onMouseLeave={() => setHovered(null)}
-          style={{
-            ...btnBase,
-            padding: '5px 8px',
-            fontSize: '20px',
-            marginLeft: 4,
-            background:
-              hovered === 'terminal' || folderPickerKind === 'terminal'
-                ? 'var(--pixel-btn-hover-bg)'
-                : btnBase.background,
-            border: '2px solid var(--pixel-border)',
-            color: 'var(--pixel-text-dim)',
-          }}
-          title="Open a terminal agent"
-        >
-          + Terminal
-        </button>
-        <button
           onClick={() => vscode.postMessage({ type: 'listResumableSessions' })}
           onMouseEnter={() => setHovered('resume')}
           onMouseLeave={() => setHovered(null)}
