@@ -222,8 +222,20 @@ function spawnPty(opts: {
     if (record.sessionId && ptySessionIds.get(record.sessionId) === ptyId) {
       ptySessionIds.delete(record.sessionId);
     }
-    // agentToPty/ptyToAgent are kept so clicking the character still focuses
-    // the (exited) terminal tab; they're cleaned up in removeAgent.
+
+    // The agent's lifecycle IS its terminal's lifecycle: when the PTY exits
+    // (tab closed, `exit` typed, claude finished), the character goes too.
+    const agentId = ptyToAgent.get(ptyId);
+    if (agentId !== undefined) {
+      removeAgent(agentId);
+      ctx.send({ type: 'agentClosed', id: agentId });
+    }
+    // Close the tab on a clean exit; keep it visible after a crash so the
+    // error output can be read (the tab shows an exited marker and can be
+    // closed manually).
+    if (exitCode === 0) {
+      ctx.send({ type: 'pty-close-tab', ptyId });
+    }
   });
 
   return ptyId;
@@ -481,12 +493,15 @@ function handleWebviewMessage(msg: WebviewToHostMessage): void {
   } else if (msg.type === 'closeAgent') {
     const id = msg.id;
     const ptyId = agentToPty.get(id);
-    if (ptyId) {
+    if (ptyId && ptys.has(ptyId)) {
+      // Killing the PTY triggers onExit, which removes the agent and
+      // announces agentClosed — one path for all terminal deaths.
       ctx.send({ type: 'pty-close-tab', ptyId });
       killPty(ptyId);
+    } else {
+      removeAgent(id);
+      ctx.send({ type: 'agentClosed', id });
     }
-    removeAgent(id);
-    ctx.send({ type: 'agentClosed', id });
   } else if (msg.type === 'focusAgent') {
     const agent = ctx.agents.get(msg.id);
     if (agent) {
