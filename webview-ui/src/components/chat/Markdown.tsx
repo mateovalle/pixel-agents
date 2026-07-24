@@ -89,6 +89,33 @@ const codePreStyle: React.CSSProperties = {
   color: 'var(--pixel-text)',
 };
 
+const tableWrapStyle: React.CSSProperties = {
+  overflowX: 'auto',
+  margin: '6px 0',
+};
+
+const tableStyle: React.CSSProperties = {
+  borderCollapse: 'collapse',
+  fontSize: CHAT_BODY_FONT_SIZE_PX,
+  lineHeight: 1.4,
+};
+
+const thStyle: React.CSSProperties = {
+  border: '1px solid var(--pixel-border)',
+  background: 'var(--pixel-chat-code-bg)',
+  padding: '4px 10px',
+  textAlign: 'left',
+  fontWeight: 700,
+  whiteSpace: 'nowrap',
+};
+
+const tdStyle: React.CSSProperties = {
+  border: '1px solid var(--pixel-border)',
+  padding: '4px 10px',
+  verticalAlign: 'top',
+  wordBreak: 'break-word',
+};
+
 const copyBtnStyle: React.CSSProperties = {
   background: 'var(--pixel-btn-bg)',
   color: 'var(--pixel-text-dim)',
@@ -183,6 +210,46 @@ function renderInline(text: string, keyBase: string): React.ReactNode[] {
   return out;
 }
 
+const TABLE_ROW_RE = /^\s*\|.*\|\s*$/;
+const TABLE_SEPARATOR_RE = /^\s*\|?\s*:?-{2,}[-\s:|]*\|?\s*$/;
+
+/** Splits a `| a | b |` row into trimmed cell strings. */
+function splitTableRow(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+  return trimmed.split('|').map((cell) => cell.trim());
+}
+
+function renderTable(rows: string[], k: string): React.ReactNode {
+  const header = splitTableRow(rows[0]);
+  const body = rows.slice(2).map(splitTableRow); // row 1 is the |---|---| separator
+  return (
+    <div key={k} style={tableWrapStyle}>
+      <table style={tableStyle}>
+        <thead>
+          <tr>
+            {header.map((cell, j) => (
+              <th key={j} style={thStyle}>
+                {renderInline(cell, `${k}h${j}`)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {body.map((cells, r) => (
+            <tr key={r}>
+              {header.map((_, j) => (
+                <td key={j} style={tdStyle}>
+                  {renderInline(cells[j] ?? '', `${k}r${r}c${j}`)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function parseBlocks(src: string): React.ReactNode[] {
   const lines = src.split('\n');
   const out: React.ReactNode[] = [];
@@ -236,6 +303,22 @@ function parseBlocks(src: string): React.ReactNode[] {
       flushPara();
       out.push(<div key={nextKey()} style={hrStyle} />);
       i++;
+      continue;
+    }
+
+    if (
+      TABLE_ROW_RE.test(line) &&
+      i + 1 < lines.length &&
+      TABLE_SEPARATOR_RE.test(lines[i + 1]) &&
+      lines[i + 1].includes('|')
+    ) {
+      flushPara();
+      const rows: string[] = [];
+      while (i < lines.length && TABLE_ROW_RE.test(lines[i])) {
+        rows.push(lines[i]);
+        i++;
+      }
+      out.push(renderTable(rows, nextKey()));
       continue;
     }
 
