@@ -12,8 +12,6 @@
     "build:webview": "cd webview-ui && npm run build",
     "build": "npm run build:electron && npm run build:webview",
     "start": "npm run build && npx electron dist-electron/main.js",
-    "postinstall": "electron-rebuild",
-    "rebuild": "electron-rebuild",
     "package": "npm run build && npx electron-builder"
   },
   "build": {
@@ -43,15 +41,12 @@
     }
   },
   "devDependencies": {
-    "@electron/rebuild": "^4.0.1",
-    "@types/pngjs": "^6.0.5",
     "concurrently": "^9.1.2",
     "electron": "^35.1.2",
     "electron-builder": "^26.0.12",
     "typescript": "~5.9.3"
   },
   "dependencies": {
-    "node-pty": "^1.0.0",
     "pngjs": "^7.0.0"
   }
 }

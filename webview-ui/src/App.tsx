@@ -2,6 +2,8 @@ import { useCallback, useRef, useState } from 'react';
 
 import { BottomToolbar } from './components/BottomToolbar.js';
 import { DebugView } from './components/DebugView.js';
+import { TerminalPanel } from './components/TerminalPanel.js';
+import { TerminalSplitter } from './components/TerminalSplitter.js';
 import { ZoomControls } from './components/ZoomControls.js';
 import { PULSE_ANIMATION_DURATION_SEC } from './constants.js';
 import { useEditorActions } from './hooks/useEditorActions.js';
@@ -140,8 +142,21 @@ function App() {
   } = useExtensionMessages(getOfficeState, editor.setLastSavedLayout, isEditDirty);
 
   const [isDebugMode, setIsDebugMode] = useState(false);
+  const [terminalVisible, setTerminalVisible] = useState(false);
+  const [terminalHeight, setTerminalHeight] = useState(250);
 
   const handleToggleDebugMode = useCallback(() => setIsDebugMode((prev) => !prev), []);
+
+  const handleTerminalCreated = useCallback(() => setTerminalVisible(true), []);
+  const handleAllTabsClosed = useCallback(() => setTerminalVisible(false), []);
+
+  const handleSplitterDrag = useCallback((deltaY: number) => {
+    setTerminalHeight((prev) => Math.max(100, Math.min(window.innerHeight - 150, prev - deltaY)));
+  }, []);
+
+  const handleSplitterDoubleClick = useCallback(() => {
+    setTerminalVisible((prev) => !prev);
+  }, []);
 
   const handleSelectAgent = useCallback((id: number) => {
     vscode.postMessage({ type: 'focusAgent', id });
@@ -216,10 +231,7 @@ function App() {
   }
 
   return (
-    <div
-      ref={containerRef}
-      style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}
-    >
+    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <style>{`
         @keyframes pixel-agents-pulse {
           0%, 100% { opacity: 1; }
@@ -228,120 +240,131 @@ function App() {
         .pixel-agents-pulse { animation: pixel-agents-pulse ${PULSE_ANIMATION_DURATION_SEC}s ease-in-out infinite; }
       `}</style>
 
-      <OfficeCanvas
-        officeState={officeState}
-        onClick={handleClick}
-        isEditMode={editor.isEditMode}
-        editorState={editorState}
-        onEditorTileAction={editor.handleEditorTileAction}
-        onEditorEraseAction={editor.handleEditorEraseAction}
-        onEditorSelectionChange={editor.handleEditorSelectionChange}
-        onDeleteSelected={editor.handleDeleteSelected}
-        onRotateSelected={editor.handleRotateSelected}
-        onDragMove={editor.handleDragMove}
-        editorTick={editor.editorTick}
-        zoom={editor.zoom}
-        onZoomChange={editor.handleZoomChange}
-        panRef={editor.panRef}
-      />
-
-      <ZoomControls zoom={editor.zoom} onZoomChange={editor.handleZoomChange} />
-
-      {/* Vignette overlay */}
+      {/* Office area */}
       <div
-        style={{
-          position: 'absolute',
-          inset: 0,
-          background: 'var(--pixel-vignette)',
-          pointerEvents: 'none',
-          zIndex: 40,
-        }}
-      />
+        ref={containerRef}
+        style={{ flex: 1, position: 'relative', overflow: 'hidden', minHeight: 100 }}
+      >
+        <OfficeCanvas
+          officeState={officeState}
+          onClick={handleClick}
+          isEditMode={editor.isEditMode}
+          editorState={editorState}
+          onEditorTileAction={editor.handleEditorTileAction}
+          onEditorEraseAction={editor.handleEditorEraseAction}
+          onEditorSelectionChange={editor.handleEditorSelectionChange}
+          onDeleteSelected={editor.handleDeleteSelected}
+          onRotateSelected={editor.handleRotateSelected}
+          onDragMove={editor.handleDragMove}
+          editorTick={editor.editorTick}
+          zoom={editor.zoom}
+          onZoomChange={editor.handleZoomChange}
+          panRef={editor.panRef}
+        />
 
-      <BottomToolbar
-        isEditMode={editor.isEditMode}
-        onOpenClaude={editor.handleOpenClaude}
-        onToggleEditMode={editor.handleToggleEditMode}
-        isDebugMode={isDebugMode}
-        onToggleDebugMode={handleToggleDebugMode}
-        workspaceFolders={workspaceFolders}
-      />
+        <ZoomControls zoom={editor.zoom} onZoomChange={editor.handleZoomChange} />
 
-      {editor.isEditMode && editor.isDirty && (
-        <EditActionBar editor={editor} editorState={editorState} />
-      )}
-
-      {showRotateHint && (
+        {/* Vignette overlay */}
         <div
           style={{
             position: 'absolute',
-            top: 8,
-            left: '50%',
-            transform: editor.isDirty ? 'translateX(calc(-50% + 100px))' : 'translateX(-50%)',
-            zIndex: 49,
-            background: 'var(--pixel-hint-bg)',
-            color: '#fff',
-            fontSize: '20px',
-            padding: '3px 8px',
-            borderRadius: 0,
-            border: '2px solid var(--pixel-accent)',
-            boxShadow: 'var(--pixel-shadow)',
+            inset: 0,
+            background: 'var(--pixel-vignette)',
             pointerEvents: 'none',
-            whiteSpace: 'nowrap',
+            zIndex: 40,
           }}
-        >
-          Press <b>R</b> to rotate
-        </div>
-      )}
-
-      {editor.isEditMode &&
-        (() => {
-          // Compute selected furniture color from current layout
-          const selUid = editorState.selectedFurnitureUid;
-          const selColor = selUid
-            ? (officeState.getLayout().furniture.find((f) => f.uid === selUid)?.color ?? null)
-            : null;
-          return (
-            <EditorToolbar
-              activeTool={editorState.activeTool}
-              selectedTileType={editorState.selectedTileType}
-              selectedFurnitureType={editorState.selectedFurnitureType}
-              selectedFurnitureUid={selUid}
-              selectedFurnitureColor={selColor}
-              floorColor={editorState.floorColor}
-              wallColor={editorState.wallColor}
-              onToolChange={editor.handleToolChange}
-              onTileTypeChange={editor.handleTileTypeChange}
-              onFloorColorChange={editor.handleFloorColorChange}
-              onWallColorChange={editor.handleWallColorChange}
-              onSelectedFurnitureColorChange={editor.handleSelectedFurnitureColorChange}
-              onFurnitureTypeChange={editor.handleFurnitureTypeChange}
-              loadedAssets={loadedAssets}
-            />
-          );
-        })()}
-
-      <ToolOverlay
-        officeState={officeState}
-        agents={agents}
-        agentTools={agentTools}
-        subagentCharacters={subagentCharacters}
-        containerRef={containerRef}
-        zoom={editor.zoom}
-        panRef={editor.panRef}
-        onCloseAgent={handleCloseAgent}
-      />
-
-      {isDebugMode && (
-        <DebugView
-          agents={agents}
-          selectedAgent={selectedAgent}
-          agentTools={agentTools}
-          agentStatuses={agentStatuses}
-          subagentTools={subagentTools}
-          onSelectAgent={handleSelectAgent}
         />
+
+        <BottomToolbar
+          isEditMode={editor.isEditMode}
+          onOpenClaude={editor.handleOpenClaude}
+          onToggleEditMode={editor.handleToggleEditMode}
+          isDebugMode={isDebugMode}
+          onToggleDebugMode={handleToggleDebugMode}
+          workspaceFolders={workspaceFolders}
+        />
+
+        {editor.isEditMode && editor.isDirty && (
+          <EditActionBar editor={editor} editorState={editorState} />
+        )}
+
+        {showRotateHint && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 8,
+              left: '50%',
+              transform: editor.isDirty ? 'translateX(calc(-50% + 100px))' : 'translateX(-50%)',
+              zIndex: 49,
+              background: 'var(--pixel-hint-bg)',
+              color: '#fff',
+              fontSize: '20px',
+              padding: '3px 8px',
+              borderRadius: 0,
+              border: '2px solid var(--pixel-accent)',
+              boxShadow: 'var(--pixel-shadow)',
+              pointerEvents: 'none',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Press <b>R</b> to rotate
+          </div>
+        )}
+
+        {editor.isEditMode &&
+          (() => {
+            const selUid = editorState.selectedFurnitureUid;
+            const selColor = selUid
+              ? (officeState.getLayout().furniture.find((f) => f.uid === selUid)?.color ?? null)
+              : null;
+            return (
+              <EditorToolbar
+                activeTool={editorState.activeTool}
+                selectedTileType={editorState.selectedTileType}
+                selectedFurnitureType={editorState.selectedFurnitureType}
+                selectedFurnitureUid={selUid}
+                selectedFurnitureColor={selColor}
+                floorColor={editorState.floorColor}
+                wallColor={editorState.wallColor}
+                onToolChange={editor.handleToolChange}
+                onTileTypeChange={editor.handleTileTypeChange}
+                onFloorColorChange={editor.handleFloorColorChange}
+                onWallColorChange={editor.handleWallColorChange}
+                onSelectedFurnitureColorChange={editor.handleSelectedFurnitureColorChange}
+                onFurnitureTypeChange={editor.handleFurnitureTypeChange}
+                loadedAssets={loadedAssets}
+              />
+            );
+          })()}
+
+        <ToolOverlay
+          officeState={officeState}
+          agents={agents}
+          agentTools={agentTools}
+          subagentCharacters={subagentCharacters}
+          containerRef={containerRef}
+          zoom={editor.zoom}
+          panRef={editor.panRef}
+          onCloseAgent={handleCloseAgent}
+        />
+
+        {isDebugMode && (
+          <DebugView
+            agents={agents}
+            selectedAgent={selectedAgent}
+            agentTools={agentTools}
+            agentStatuses={agentStatuses}
+            subagentTools={subagentTools}
+            onSelectAgent={handleSelectAgent}
+          />
+        )}
+      </div>
+
+      {/* Terminal area */}
+      {terminalVisible && (
+        <TerminalSplitter onDrag={handleSplitterDrag} onDoubleClick={handleSplitterDoubleClick} />
       )}
+      <TerminalPanel height={terminalVisible ? terminalHeight : 0} onTerminalCreated={handleTerminalCreated} onShowTerminal={handleTerminalCreated} onAllTabsClosed={handleAllTabsClosed} />
     </div>
   );
 }

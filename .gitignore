@@ -1,6 +1,9 @@
 out
 dist
+dist-electron/
+release/
 node_modules
+.DS_Store
 .vscode-test/
 *.vsix
 .claude/
