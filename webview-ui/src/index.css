@@ -50,6 +50,17 @@
   --pixel-overlay-z: 100;
   --pixel-overlay-selected-z: 110;
   --pixel-controls-z: 50;
+
+  /* Chat UI */
+  --pixel-chat-amber: #f9e2af;
+  --pixel-chat-green: #a6e3a1;
+  --pixel-chat-red: #f38ba8;
+  --pixel-chat-user-bg: rgba(90, 140, 255, 0.14);
+  --pixel-chat-card-bg: #262637;
+  --pixel-chat-code-bg: #14141f;
+  --pixel-chat-permission-bg: rgba(249, 226, 175, 0.08);
+  --pixel-chat-diff-old-bg: rgba(243, 139, 168, 0.15);
+  --pixel-chat-diff-new-bg: rgba(166, 227, 161, 0.15);
 }
 
 html,
@@ -64,4 +75,36 @@ body,
 
 * {
   font-family: 'FS Pixel Sans', sans-serif;
+}
+
+/* Chat body text — readable stacks override the global pixel font.
+   Declared after the universal rule so equal-or-higher specificity wins. */
+.pixel-chat-body,
+.pixel-chat-body * {
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+}
+
+.pixel-chat-mono,
+.pixel-chat-mono * {
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+}
+
+/* Animated "running" dots for in-progress tool cards */
+@keyframes pixel-chat-dot-blink {
+  0%,
+  80%,
+  100% {
+    opacity: 0.2;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+
+.pixel-chat-dot {
+  animation: pixel-chat-dot-blink 1.2s ease-in-out infinite;
 }

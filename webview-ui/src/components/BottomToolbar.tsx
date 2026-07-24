@@ -7,11 +7,15 @@ import { SettingsModal } from './SettingsModal.js';
 interface BottomToolbarProps {
   isEditMode: boolean;
   onOpenClaude: () => void;
+  onOpenChatAgent: () => void;
   onToggleEditMode: () => void;
   isDebugMode: boolean;
   onToggleDebugMode: () => void;
   workspaceFolders: WorkspaceFolder[];
 }
+
+/** Which kind of agent the open folder-picker will launch. */
+type AgentKind = 'chat' | 'terminal';
 
 const panelStyle: React.CSSProperties = {
   position: 'absolute',
@@ -47,6 +51,7 @@ const btnActive: React.CSSProperties = {
 export function BottomToolbar({
   isEditMode,
   onOpenClaude,
+  onOpenChatAgent,
   onToggleEditMode,
   isDebugMode,
   onToggleDebugMode,
@@ -54,16 +59,18 @@ export function BottomToolbar({
 }: BottomToolbarProps) {
   const [hovered, setHovered] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false);
+  const [folderPickerKind, setFolderPickerKind] = useState<AgentKind | null>(null);
   const [hoveredFolder, setHoveredFolder] = useState<number | null>(null);
   const folderPickerRef = useRef<HTMLDivElement>(null);
+
+  const isFolderPickerOpen = folderPickerKind !== null;
 
   // Close folder picker on outside click
   useEffect(() => {
     if (!isFolderPickerOpen) return;
     const handleClick = (e: MouseEvent) => {
       if (folderPickerRef.current && !folderPickerRef.current.contains(e.target as Node)) {
-        setIsFolderPickerOpen(false);
+        setFolderPickerKind(null);
       }
     };
     document.addEventListener('mousedown', handleClick);
@@ -72,38 +79,66 @@ export function BottomToolbar({
 
   const hasMultipleFolders = workspaceFolders.length > 1;
 
-  const handleAgentClick = () => {
+  const handleAgentClick = (kind: AgentKind) => {
     if (hasMultipleFolders) {
-      setIsFolderPickerOpen((v) => !v);
+      setFolderPickerKind((prev) => (prev === kind ? null : kind));
+    } else if (kind === 'chat') {
+      onOpenChatAgent();
     } else {
       onOpenClaude();
     }
   };
 
   const handleFolderSelect = (folder: WorkspaceFolder) => {
-    setIsFolderPickerOpen(false);
-    vscode.postMessage({ type: 'openClaude', folderPath: folder.path });
+    const kind = folderPickerKind;
+    setFolderPickerKind(null);
+    if (kind === 'terminal') {
+      vscode.postMessage({ type: 'openClaude', folderPath: folder.path });
+    } else {
+      vscode.postMessage({ type: 'openChatAgent', folderPath: folder.path });
+    }
   };
 
   return (
     <div style={panelStyle}>
       <div ref={folderPickerRef} style={{ position: 'relative' }}>
         <button
-          onClick={handleAgentClick}
+          onClick={() => handleAgentClick('chat')}
           onMouseEnter={() => setHovered('agent')}
           onMouseLeave={() => setHovered(null)}
           style={{
             ...btnBase,
             padding: '5px 12px',
             background:
-              hovered === 'agent' || isFolderPickerOpen
+              hovered === 'agent' || folderPickerKind === 'chat'
                 ? 'var(--pixel-agent-hover-bg)'
                 : 'var(--pixel-agent-bg)',
             border: '2px solid var(--pixel-agent-border)',
             color: 'var(--pixel-agent-text)',
           }}
+          title="Open a chat agent"
         >
           + Agent
+        </button>
+        <button
+          onClick={() => handleAgentClick('terminal')}
+          onMouseEnter={() => setHovered('terminal')}
+          onMouseLeave={() => setHovered(null)}
+          style={{
+            ...btnBase,
+            padding: '5px 8px',
+            fontSize: '20px',
+            marginLeft: 4,
+            background:
+              hovered === 'terminal' || folderPickerKind === 'terminal'
+                ? 'var(--pixel-btn-hover-bg)'
+                : btnBase.background,
+            border: '2px solid var(--pixel-border)',
+            color: 'var(--pixel-text-dim)',
+          }}
+          title="Open a terminal agent"
+        >
+          + Terminal
         </button>
         {isFolderPickerOpen && (
           <div

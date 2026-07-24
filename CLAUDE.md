@@ -34,18 +34,29 @@ electron/                     — Electron desktop host (imports src/core; tscon
                                 dist-electron/electron/main.js + dist-electron/src/core/)
   main.ts                     — Main process: window, node-pty terminals (main constructs ALL commands;
                                 renderer only sends keystrokes). INTERNAL SESSIONS ONLY: agents exist solely
-                                for terminals the app spawned (no scanning of external sessions). /clear
-                                detection scans each agent's project dir; a new JSONL is reassigned to the
-                                agent there whose PTY most recently received input. Scrollback replay
-                                (pty-ready→pty-replay), seat/palette persistence keyed by SESSION id
-                                (~/.pixel-agents/agent-seats.json), settings, login-shell PATH fix for
-                                packaged builds, sandbox+navigation guards
+                                for sessions the app spawned (no scanning of external sessions). TWO AGENT
+                                KINDS: 'terminal' (PTY running claude, xterm tab) and 'chat' (Agent SDK
+                                session, rich chat tab — the default for "+ Agent"). Both kinds register a
+                                transcript watcher via a caller-supplied sessionId, so office characters
+                                animate identically for both. /clear detection scans each agent's project
+                                dir; a new JSONL is reassigned to the agent there whose PTY/composer most
+                                recently received input. Scrollback replay (pty-ready→pty-replay),
+                                seat/palette persistence keyed by SESSION id, settings, folder picker on
+                                agent creation, login-shell PATH fix, sandbox+navigation guards
+  chatAgent.ts                — Agent SDK chat sessions: query() with a streaming input queue (dynamic
+                                ESM import from CJS), reduces SDKMessage stream → ChatEvent protocol,
+                                canUseTool → chat-permission-request/-response promise bridge, capped
+                                history buffer replayed on chatReady, interrupt, dispose
   preload.ts                  — Minimal contextBridge: postMessage/onMessage + ptyInput/Resize/Kill/Ready
 
 webview-ui/src/               — React + TypeScript (Vite)
   vscodeApi.ts                — Host abstraction: VS Code webview API or Electron IPC bridge (typed by protocol)
   components/TerminalPanel.tsx / TerminalInstance.tsx / TerminalTabs.tsx / TerminalSplitter.tsx
-                              — Electron-only xterm.js terminal tabs (hidden-not-unmounted, replay-gated output)
+                              — Electron-only bottom panel: mixed terminal (xterm.js) + chat tabs
+                                (hidden-not-unmounted, replay-gated output)
+  components/chat/            — Rich chat UI for SDK agents: ChatView (event reducer + message list +
+                                composer + permission cards), ToolCard (collapsible, Edit diffs),
+                                Markdown (dependency-free safe renderer)
   constants.ts                — All webview magic numbers/strings (grid, animation, rendering, camera, zoom, editor, game logic, notification sound)
   notificationSound.ts        — Web Audio API chime on agent turn completion, with enable/disable
   App.tsx                     — Composition root, hooks + components + EditActionBar

@@ -51,11 +51,38 @@ export type AgentStatus = 'active' | 'waiting';
 /** Serialized office layout (validated structurally, not deeply typed). */
 export type LayoutData = Record<string, unknown>;
 
+// ── Chat sessions (Electron only) ────────────────────────────
+
+/**
+ * Simplified rendering stream for SDK-driven chat sessions. The main
+ * process reduces Agent SDK messages to these events; the webview renders
+ * them without knowing SDK internals.
+ */
+export type ChatEvent =
+  /** Echo of a prompt the user sent (also used for replay after reload). */
+  | { kind: 'user-text'; text: string }
+  /** Streaming assistant text (append to the in-progress text block). */
+  | { kind: 'text-delta'; text: string }
+  /** A completed content block — replaces accumulated deltas for 'text'. */
+  | { kind: 'block-final'; block: 'text' | 'thinking'; text: string }
+  | { kind: 'tool-start'; toolId: string; name: string; input: Record<string, unknown> }
+  | { kind: 'tool-result'; toolId: string; isError: boolean; summary: string }
+  | { kind: 'turn-complete'; costUsd: number; durationMs: number; isError: boolean }
+  /** Informational status line (compaction, retries, …). */
+  | { kind: 'status'; text: string }
+  | { kind: 'error'; message: string };
+
 // ── Host → Webview ───────────────────────────────────────────
 
 export type HostToWebviewMessage =
   // Agent lifecycle
-  | { type: 'agentCreated'; id: number; folderName?: string; ptyId?: string }
+  | {
+      type: 'agentCreated';
+      id: number;
+      folderName?: string;
+      ptyId?: string;
+      agentKind?: 'terminal' | 'chat';
+    }
   | { type: 'agentClosed'; id: number }
   | { type: 'agentSelected'; id: number }
   | {
@@ -95,13 +122,49 @@ export type HostToWebviewMessage =
   | { type: 'pty-close-tab'; ptyId: string }
   | { type: 'pty-output'; ptyId: string; data: string }
   | { type: 'pty-replay'; ptyId: string; data: string }
-  | { type: 'pty-exit'; ptyId: string; exitCode: number };
+  | { type: 'pty-exit'; ptyId: string; exitCode: number }
+  // Chat tabs (Electron only, SDK-driven sessions)
+  | { type: 'chat-created'; agentId: number; label: string }
+  | { type: 'chat-focus'; agentId: number }
+  | { type: 'chat-close-tab'; agentId: number }
+  | { type: 'chat-event'; agentId: number; event: ChatEvent }
+  | { type: 'chat-replay'; agentId: number; events: ChatEvent[] }
+  /** The agent is mid-turn (composer should show Stop instead of Send). */
+  | { type: 'chat-busy'; agentId: number; busy: boolean }
+  | {
+      type: 'chat-permission-request';
+      agentId: number;
+      requestId: string;
+      toolName: string;
+      /** Full prompt sentence, e.g. "Claude wants to read foo.txt". */
+      title?: string;
+      /** Human-readable subtitle with extra context. */
+      description?: string;
+      input: Record<string, unknown>;
+    }
+  /** The request was resolved elsewhere (abort/turn end) — remove the card. */
+  | { type: 'chat-permission-resolved'; agentId: number; requestId: string };
 
 // ── Webview → Host ───────────────────────────────────────────
 
 export type WebviewToHostMessage =
   | { type: 'webviewReady' }
+  /** Opens a TERMINAL agent (PTY). No folderPath → host shows a folder picker. */
   | { type: 'openClaude'; folderPath?: string }
+  /** Opens a CHAT agent (Agent SDK). No folderPath → host shows a folder picker. */
+  | { type: 'openChatAgent'; folderPath?: string }
+  | { type: 'chatSend'; id: number; text: string }
+  | { type: 'chatInterrupt'; id: number }
+  /** ChatView for this agent mounted — host replays its event history. */
+  | { type: 'chatReady'; id: number }
+  | {
+      type: 'chatPermissionResponse';
+      id: number;
+      requestId: string;
+      allow: boolean;
+      /** Optional feedback delivered to Claude on deny. */
+      message?: string;
+    }
   | { type: 'focusAgent'; id: number }
   | { type: 'closeAgent'; id: number }
   | { type: 'saveAgentSeats'; seats: Record<number, AgentSeatMeta> }

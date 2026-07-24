@@ -1,14 +1,13 @@
-export interface TerminalTab {
-  ptyId: string;
-  label: string;
-  exited: boolean;
-}
+/** A tab in the bottom panel: an xterm terminal or an SDK-driven chat view. */
+export type PanelTab =
+  | { kind: 'terminal'; key: string; ptyId: string; label: string; exited: boolean }
+  | { kind: 'chat'; key: string; agentId: number; label: string };
 
 interface TerminalTabsProps {
-  tabs: TerminalTab[];
-  activeTab: string | null;
-  onSelect: (ptyId: string) => void;
-  onClose: (ptyId: string) => void;
+  tabs: PanelTab[];
+  activeKey: string | null;
+  onSelect: (key: string) => void;
+  onClose: (tab: PanelTab) => void;
 }
 
 const tabStyle: React.CSSProperties = {
@@ -44,7 +43,13 @@ const closeButtonStyle: React.CSSProperties = {
   borderRadius: 0,
 };
 
-export function TerminalTabs({ tabs, activeTab, onSelect, onClose }: TerminalTabsProps) {
+const chatMarkerStyle: React.CSSProperties = {
+  color: 'var(--pixel-chat-green)',
+  fontSize: '16px',
+  lineHeight: 1,
+};
+
+export function TerminalTabs({ tabs, activeKey, onSelect, onClose }: TerminalTabsProps) {
   return (
     <div
       style={{
@@ -59,20 +64,25 @@ export function TerminalTabs({ tabs, activeTab, onSelect, onClose }: TerminalTab
     >
       {tabs.map((tab) => (
         <div
-          key={tab.ptyId}
-          style={tab.ptyId === activeTab ? activeTabStyle : tabStyle}
-          onClick={() => onSelect(tab.ptyId)}
+          key={tab.key}
+          style={tab.key === activeKey ? activeTabStyle : tabStyle}
+          onClick={() => onSelect(tab.key)}
         >
-          <span style={{ opacity: tab.exited ? 0.5 : 1 }}>
+          {tab.kind === 'chat' && (
+            <span style={chatMarkerStyle} title="Chat agent">
+              ❯
+            </span>
+          )}
+          <span style={{ opacity: tab.kind === 'terminal' && tab.exited ? 0.5 : 1 }}>
             {tab.label}
           </span>
           <button
             style={closeButtonStyle}
             onClick={(e) => {
               e.stopPropagation();
-              onClose(tab.ptyId);
+              onClose(tab);
             }}
-            title="Close terminal"
+            title={tab.kind === 'chat' ? 'Close chat agent' : 'Close terminal'}
           >
             x
           </button>

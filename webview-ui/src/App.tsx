@@ -162,6 +162,10 @@ function App() {
     vscode.postMessage({ type: 'focusAgent', id });
   }, []);
 
+  const handleOpenChatAgent = useCallback(() => {
+    vscode.postMessage({ type: 'openChatAgent' });
+  }, []);
+
   const containerRef = useRef<HTMLDivElement>(null);
 
   const [editorTickForKeyboard, setEditorTickForKeyboard] = useState(0);
@@ -285,6 +289,7 @@ function App() {
         <BottomToolbar
           isEditMode={editor.isEditMode}
           onOpenClaude={editor.handleOpenClaude}
+          onOpenChatAgent={handleOpenChatAgent}
           onToggleEditMode={editor.handleToggleEditMode}
           isDebugMode={isDebugMode}
           onToggleDebugMode={handleToggleDebugMode}

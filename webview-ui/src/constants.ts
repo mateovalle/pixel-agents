@@ -96,6 +96,22 @@ export const NOTIFICATION_NOTE_2_START_SEC = 0.1;
 export const NOTIFICATION_NOTE_DURATION_SEC = 0.18;
 export const NOTIFICATION_VOLUME = 0.14;
 
+// ── Chat UI ──────────────────────────────────────────────────
+export const CHAT_BODY_FONT_SIZE_PX = 13;
+export const CHAT_CODE_FONT_SIZE_PX = 12;
+export const CHAT_TOOL_SUMMARY_MAX_CHARS = 60;
+export const CHAT_JSON_PREVIEW_MAX_CHARS = 2000;
+export const CHAT_WRITE_PREVIEW_MAX_CHARS = 2000;
+export const CHAT_RESULT_MAX_HEIGHT_PX = 180;
+export const CHAT_NEAR_BOTTOM_PX = 80;
+export const CHAT_COMPOSER_MAX_ROWS = 8;
+export const CHAT_COMPOSER_LINE_HEIGHT_PX = 18;
+export const CHAT_COST_DECIMALS = 4;
+export const CHAT_DURATION_DECIMALS = 1;
+export const CHAT_MS_PER_SEC = 1000;
+export const CHAT_COPY_FEEDBACK_MS = 1200;
+export const CHAT_DOT_STAGGER_SEC = 0.2;
+
 // ── Game Logic ───────────────────────────────────────────────
 export const MAX_DELTA_TIME_SEC = 0.1;
 export const WAITING_BUBBLE_DURATION_SEC = 2.0;

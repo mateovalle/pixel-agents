@@ -40,6 +40,7 @@ import {
   createCoreAgentState,
   type TrackerContext,
 } from '../src/core/types.js';
+import { type ChatSession, startChatSession } from './chatAgent.js';
 
 // ── Electron-specific constants ──────────────────────────────
 const PTY_SCROLLBACK_MAX_CHARS = 200_000;
@@ -53,10 +54,13 @@ const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 
 // ── Types ────────────────────────────────────────────────────
-// Agents exist ONLY for terminals this app spawned (internal sessions).
-// External Claude sessions (iTerm, VS Code, ...) are not tracked.
+// Agents exist ONLY for sessions this app spawned (internal sessions):
+// terminal agents own a PTY running claude; chat agents own an Agent SDK
+// session. External Claude sessions (iTerm, VS Code, ...) are not tracked.
 interface AgentState extends CoreAgentState {
-  ptyId: string;
+  kind: 'terminal' | 'chat';
+  /** Set for terminal agents only. */
+  ptyId?: string;
   sessionId: string;
   cwd: string;
 }
@@ -98,6 +102,9 @@ const ptys = new Map<string, PtyRecord>();
 const ptySessionIds = new Map<string, string>(); // sessionId → ptyId
 const agentToPty = new Map<number, string>(); // agentId → ptyId
 const ptyToAgent = new Map<string, number>(); // ptyId → agentId
+
+// Chat (Agent SDK) state
+const chatSessions = new Map<number, ChatSession>(); // agentId → session
 
 // ── Small JSON persistence helpers ───────────────────────────
 function loadJsonFile<T>(file: string): T | null {
@@ -250,13 +257,27 @@ function killPty(ptyId: string): void {
 }
 
 // ── Agent lifecycle (internal sessions only) ─────────────────
-function launchAgent(cwd: string): void {
-  const sessionId = crypto.randomUUID();
+/** Registers the office character + transcript watching shared by both agent kinds. */
+function registerAgent(kind: 'terminal' | 'chat', cwd: string, sessionId: string): AgentState {
   const projectDir = getProjectDirPath(cwd);
   const expectedFile = path.join(projectDir, `${sessionId}.jsonl`);
   // Pre-register so the /clear scan won't treat this session's own file as new
   knownJsonlFiles.add(expectedFile);
 
+  const id = nextAgentId++;
+  const agent: AgentState = {
+    ...createCoreAgentState(id, projectDir, expectedFile),
+    kind,
+    sessionId,
+    cwd,
+  };
+  ctx.agents.set(id, agent);
+  pollForJsonlFile(id);
+  return agent;
+}
+
+function launchAgent(cwd: string): void {
+  const sessionId = crypto.randomUUID();
   const label = `Agent ${nextTerminalIndex++}`;
   const ptyId = spawnPty({
     cwd,
@@ -265,23 +286,53 @@ function launchAgent(cwd: string): void {
     label,
   });
 
-  const id = nextAgentId++;
-  const agent: AgentState = {
-    ...createCoreAgentState(id, projectDir, expectedFile),
+  const agent = registerAgent('terminal', cwd, sessionId);
+  agent.ptyId = ptyId;
+  agentToPty.set(agent.id, ptyId);
+  ptyToAgent.set(ptyId, agent.id);
+
+  console.log(`Agent ${agent.id}: launched terminal session ${sessionId} in ${cwd}`);
+  ctx.send({ type: 'pty-created', ptyId, label });
+  ctx.send({
+    type: 'agentCreated',
+    id: agent.id,
     ptyId,
+    agentKind: 'terminal',
+    folderName: path.basename(cwd),
+  });
+  ensureProjectScan(agent.projectDir);
+}
+
+function launchChatAgent(cwd: string): void {
+  const sessionId = crypto.randomUUID();
+  const agent = registerAgent('chat', cwd, sessionId);
+  const label = `Agent ${nextTerminalIndex++}`;
+
+  const session = startChatSession({
+    agentId: agent.id,
     sessionId,
     cwd,
-  };
-  ctx.agents.set(id, agent);
-  agentToPty.set(id, ptyId);
-  ptyToAgent.set(ptyId, id);
+    label,
+    send: ctx.send,
+    onExit: () => {
+      // The SDK loop ended on its own (error or shutdown) — retire the
+      // character but leave the tab so any error output stays readable.
+      chatSessions.delete(agent.id);
+      if (ctx.agents.has(agent.id)) {
+        removeAgent(agent.id);
+        ctx.send({ type: 'agentClosed', id: agent.id });
+      }
+    },
+  });
+  chatSessions.set(agent.id, session);
 
-  console.log(`Agent ${id}: launched session ${sessionId} in ${cwd}`);
-  ctx.send({ type: 'pty-created', ptyId, label });
-  ctx.send({ type: 'agentCreated', id, ptyId, folderName: path.basename(cwd) });
-
-  ensureProjectScan(projectDir);
-  pollForJsonlFile(id);
+  ctx.send({ type: 'chat-created', agentId: agent.id, label });
+  ctx.send({
+    type: 'agentCreated',
+    id: agent.id,
+    agentKind: 'chat',
+    folderName: path.basename(cwd),
+  });
 }
 
 /** Poll until the agent's JSONL file appears, then start watching it. */
@@ -400,7 +451,12 @@ function mostRecentlyTypedAgentIn(projectDir: string): AgentState | null {
   let bestTime = -1;
   for (const agent of ctx.agents.values()) {
     if (agent.projectDir !== projectDir) continue;
-    const t = ptys.get(agent.ptyId)?.lastInputAt ?? 0;
+    const t =
+      agent.kind === 'terminal'
+        ? agent.ptyId
+          ? (ptys.get(agent.ptyId)?.lastInputAt ?? 0)
+          : 0
+        : (chatSessions.get(agent.id)?.lastInputAt ?? 0);
     if (t > bestTime) {
       bestTime = t;
       best = agent;
@@ -416,10 +472,12 @@ function reassignAgentToFile(agent: AgentState, newFilePath: string): void {
   clearAgentActivity(ctx, agent.id);
 
   const newSessionId = path.basename(newFilePath, '.jsonl');
-  ptySessionIds.delete(agent.sessionId);
-  ptySessionIds.set(newSessionId, agent.ptyId);
-  const record = ptys.get(agent.ptyId);
-  if (record) record.sessionId = newSessionId;
+  if (agent.ptyId) {
+    ptySessionIds.delete(agent.sessionId);
+    ptySessionIds.set(newSessionId, agent.ptyId);
+    const record = ptys.get(agent.ptyId);
+    if (record) record.sessionId = newSessionId;
+  }
 
   agent.sessionId = newSessionId;
   agent.jsonlFile = newFilePath;
@@ -476,11 +534,41 @@ function setupIpcHandlers(): void {
   });
 }
 
+/** Resolves the working directory for a new agent, showing a picker when needed. */
+async function resolveAgentCwd(folderPath: string | undefined): Promise<string | null> {
+  if (folderPath) return folderPath;
+  if (!mainWindow) return null;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose a project folder for this agent',
+    properties: ['openDirectory', 'createDirectory'],
+    defaultPath: os.homedir(),
+  });
+  return result.filePaths[0] ?? null;
+}
+
 function handleWebviewMessage(msg: WebviewToHostMessage): void {
   if (msg.type === 'webviewReady') {
     onWebviewReady();
   } else if (msg.type === 'openClaude') {
-    launchAgent(msg.folderPath || os.homedir());
+    void resolveAgentCwd(msg.folderPath).then((cwd) => {
+      if (cwd) launchAgent(cwd);
+    });
+  } else if (msg.type === 'openChatAgent') {
+    void resolveAgentCwd(msg.folderPath).then((cwd) => {
+      if (cwd) launchChatAgent(cwd);
+    });
+  } else if (msg.type === 'chatSend') {
+    chatSessions.get(msg.id)?.send(msg.text);
+  } else if (msg.type === 'chatInterrupt') {
+    chatSessions.get(msg.id)?.interrupt();
+  } else if (msg.type === 'chatReady') {
+    const session = chatSessions.get(msg.id);
+    if (session) {
+      ctx.send({ type: 'chat-replay', agentId: msg.id, events: session.history });
+      ctx.send({ type: 'chat-busy', agentId: msg.id, busy: session.busy });
+    }
+  } else if (msg.type === 'chatPermissionResponse') {
+    chatSessions.get(msg.id)?.respondPermission(msg.requestId, msg.allow, msg.message);
   } else if (msg.type === 'saveLayout') {
     if (isValidLayout(msg.layout)) {
       layoutWatcher?.markOwnWrite();
@@ -492,8 +580,15 @@ function handleWebviewMessage(msg: WebviewToHostMessage): void {
     saveJsonFile(SETTINGS_FILE, { soundEnabled: !!msg.enabled });
   } else if (msg.type === 'closeAgent') {
     const id = msg.id;
+    const chat = chatSessions.get(id);
     const ptyId = agentToPty.get(id);
-    if (ptyId && ptys.has(ptyId)) {
+    if (chat) {
+      chatSessions.delete(id);
+      chat.dispose();
+      ctx.send({ type: 'chat-close-tab', agentId: id });
+      removeAgent(id);
+      ctx.send({ type: 'agentClosed', id });
+    } else if (ptyId && ptys.has(ptyId)) {
       // Killing the PTY triggers onExit, which removes the agent and
       // announces agentClosed — one path for all terminal deaths.
       ctx.send({ type: 'pty-close-tab', ptyId });
@@ -504,7 +599,9 @@ function handleWebviewMessage(msg: WebviewToHostMessage): void {
     }
   } else if (msg.type === 'focusAgent') {
     const agent = ctx.agents.get(msg.id);
-    if (agent) {
+    if (agent?.kind === 'chat') {
+      ctx.send({ type: 'chat-focus', agentId: msg.id });
+    } else if (agent?.ptyId) {
       ctx.send({ type: 'pty-focus', ptyId: agent.ptyId, agentId: msg.id });
     }
   } else if (msg.type === 'openSessionsFolder') {
@@ -525,6 +622,10 @@ function onWebviewReady(): void {
   // tab's TerminalInstance requests a scrollback replay via 'pty-ready'.
   for (const [ptyId, record] of ptys) {
     ctx.send({ type: 'pty-created', ptyId, label: record.label });
+  }
+  // Same for chat tabs — each ChatView requests its history via 'chatReady'.
+  for (const [agentId, session] of chatSessions) {
+    ctx.send({ type: 'chat-created', agentId, label: session.label });
   }
 
   // Send existing agents with session-keyed seat/palette metadata
@@ -665,6 +766,8 @@ function cleanupAndQuit(): void {
   layoutWatcher = null;
   for (const timer of projectScanTimers.values()) clearInterval(timer);
   projectScanTimers.clear();
+  for (const session of chatSessions.values()) session.dispose();
+  chatSessions.clear();
   for (const id of [...ctx.agents.keys()]) removeAgent(id);
   for (const ptyId of [...ptys.keys()]) killPty(ptyId);
   ptys.clear();
