@@ -506,10 +506,20 @@ function reassignAgentToFile(agent: AgentState, newFilePath: string): void {
 
 // ── Session resume ───────────────────────────────────────────
 const RESUME_LIST_MAX = 20;
-const PREVIEW_READ_BYTES = 16384;
+const PREVIEW_READ_BYTES = 65536;
 const PREVIEW_MAX_CHARS = 120;
 
-/** Reads the first user prompt from a transcript for display in the resume picker. */
+/**
+ * True for synthetic user records Claude Code writes into transcripts:
+ * slash-command bookkeeping (<command-name>…), local command output
+ * (<local-command-stdout>…), the local-command caveat, system reminders,
+ * and interrupt markers. None of these are what the human actually asked.
+ */
+function isSyntheticUserText(text: string): boolean {
+  return text.startsWith('<') || text.startsWith('[Request interrupted');
+}
+
+/** Reads the first real user prompt from a transcript for the resume picker. */
 function readSessionPreview(jsonlFile: string): string {
   try {
     const fd = fs.openSync(jsonlFile, 'r');
@@ -521,22 +531,24 @@ function readSessionPreview(jsonlFile: string): string {
       try {
         const record = JSON.parse(line) as {
           type?: string;
+          isMeta?: boolean;
           message?: { content?: unknown };
         };
-        if (record.type !== 'user') continue;
+        if (record.type !== 'user' || record.isMeta) continue;
         const content = record.message?.content;
-        let text = '';
+        const candidates: string[] = [];
         if (typeof content === 'string') {
-          text = content;
+          candidates.push(content);
         } else if (Array.isArray(content)) {
-          const textBlock = content.find(
-            (b: { type?: string; text?: string }) => b?.type === 'text' && b.text,
-          ) as { text?: string } | undefined;
-          text = textBlock?.text ?? '';
+          for (const b of content as Array<{ type?: string; text?: string }>) {
+            if (b?.type === 'text' && b.text) candidates.push(b.text);
+          }
         }
-        text = text.trim();
-        if (text) {
-          return text.length > PREVIEW_MAX_CHARS ? text.slice(0, PREVIEW_MAX_CHARS) + '…' : text;
+        for (const candidate of candidates) {
+          const text = candidate.trim().replace(/\s+/g, ' ');
+          if (text && !isSyntheticUserText(text)) {
+            return text.length > PREVIEW_MAX_CHARS ? text.slice(0, PREVIEW_MAX_CHARS) + '…' : text;
+          }
         }
       } catch {
         /* partial line */
