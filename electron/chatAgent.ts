@@ -277,6 +277,9 @@ export function startChatSession(opts: {
     // watcher registered on this id keeps working in both cases.
     ...(opts.resume ? { resume: sessionId } : { sessionId }),
     permissionMode: 'default',
+    // Required for the Bypass option in the mode selector to be accepted;
+    // sessions still START in 'default' — this only unlocks the switch.
+    allowDangerouslySkipPermissions: true,
     includePartialMessages: true,
     canUseTool: (toolName, toolInput, callOpts) =>
       new Promise<PermissionResult>((resolve) => {
