@@ -43,6 +43,8 @@ electron/                     — Electron desktop host (imports src/core; tscon
                                 recently received input. Scrollback replay (pty-ready→pty-replay),
                                 seat/palette persistence keyed by SESSION id, settings, folder picker on
                                 agent creation, login-shell PATH fix, sandbox+navigation guards
+  workspaces.ts / todos.ts / usage.ts — persisted registries (~/.pixel-agents/): offices, per-workspace
+                                task lists, per-turn cost ledger
   chatAgent.ts                — Agent SDK chat sessions: query() with a streaming input queue (dynamic
                                 ESM import from CJS), reduces SDKMessage stream → ChatEvent protocol,
                                 canUseTool → chat-permission-request/-response promise bridge, capped
@@ -54,6 +56,9 @@ webview-ui/src/               — React + TypeScript (Vite)
   components/TerminalPanel.tsx / TerminalInstance.tsx / TerminalTabs.tsx / TerminalSplitter.tsx
                               — Electron-only bottom panel: mixed terminal (xterm.js) + chat tabs
                                 (hidden-not-unmounted, replay-gated output)
+  office/engine/campusState.ts — CAMPUS: one OfficeState per workspace at grid origins; per-office
+                                layouts (default + overrides); office popup (+ Agent/Tasks/Resume/Remove)
+  components/TasksDrawer.tsx  — per-workspace human todos (assignable to agents) + live agent TodoWrite plans
   components/chat/            — Rich chat UI for SDK agents: ChatView (event reducer + message list +
                                 composer + permission cards), ToolCard (collapsible, Edit diffs),
                                 Markdown (dependency-free safe renderer)
