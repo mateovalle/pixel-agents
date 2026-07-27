@@ -40,6 +40,7 @@ import {
   createCoreAgentState,
   type TrackerContext,
 } from '../src/core/types.js';
+import { type AchievementEvent, listAchievements, recordAchievementEvent } from './achievements.js';
 import { type ChatSession, startChatSession } from './chatAgent.js';
 import { addTodo, deleteTodo, getAllTodoPaths, getTodos, toggleTodo } from './todos.js';
 import { recordTurnUsage, summarizeUsage } from './usage.js';
@@ -344,12 +345,14 @@ function launchChatAgent(cwd: string, resumeSessionId?: string, initialPrompt?: 
         const item = getTodos(cwd).find((t) => t.id === id && t.status === 'open');
         if (!item) return false;
         ctx.send({ type: 'workspaceTodos', path: cwd, todos: toggleTodo(cwd, id) });
+        trackAchievement('agentTaskCompleted');
         return true;
       },
     },
     onTurnComplete: (costUsd, durationMs) => {
       recordTurnUsage(cwd, costUsd, durationMs);
       ctx.send({ type: 'usageSummary', summary: summarizeUsage() });
+      trackAchievement('turnCompleted');
     },
     onExit: () => {
       // The SDK loop ended on its own (error or shutdown) — retire the
@@ -372,6 +375,7 @@ function launchChatAgent(cwd: string, resumeSessionId?: string, initialPrompt?: 
     workspacePath: cwd,
   });
   ctx.send({ type: 'workspacesLoaded', workspaces: touchWorkspace(cwd) });
+  trackAchievement('agentSpawned', { concurrentAgents: chatSessions.size });
   if (initialPrompt) {
     session.send(initialPrompt);
   }
@@ -534,6 +538,15 @@ function reassignAgentToFile(agent: AgentState, newFilePath: string): void {
 
   startFileWatching(ctx, agent.id, newFilePath);
   readNewLines(ctx, agent.id);
+}
+
+function trackAchievement(
+  event: AchievementEvent,
+  detail?: { concurrentAgents?: number; workspaces?: number },
+): void {
+  for (const a of recordAchievementEvent(event, detail)) {
+    ctx.send({ type: 'achievementUnlocked', achievement: a });
+  }
 }
 
 // ── The Assistant ────────────────────────────────────────────
@@ -845,12 +858,15 @@ function handleWebviewMessage(msg: WebviewToHostMessage): void {
   } else if (msg.type === 'addTodo') {
     ctx.send({ type: 'workspaceTodos', path: msg.path, todos: addTodo(msg.path, msg.text) });
   } else if (msg.type === 'toggleTodo') {
+    const wasOpen = getTodos(msg.path).find((t) => t.id === msg.id)?.status === 'open';
     ctx.send({ type: 'workspaceTodos', path: msg.path, todos: toggleTodo(msg.path, msg.id) });
+    if (wasOpen) trackAchievement('taskCompleted');
   } else if (msg.type === 'deleteTodo') {
     ctx.send({ type: 'workspaceTodos', path: msg.path, todos: deleteTodo(msg.path, msg.id) });
   } else if (msg.type === 'assignTodo') {
     const todo = getTodos(msg.path).find((t) => t.id === msg.id);
     if (todo) {
+      trackAchievement('taskAssigned');
       launchChatAgent(
         msg.path,
         undefined,
@@ -977,6 +993,7 @@ function onWebviewReady(): void {
   // Send registered workspaces (offices)
   ctx.send({ type: 'workspacesLoaded', workspaces: loadWorkspaces() });
   ctx.send({ type: 'usageSummary', summary: summarizeUsage() });
+  ctx.send({ type: 'achievementsLoaded', achievements: listAchievements() });
 
   // Send human todos + live agent plans
   for (const p of getAllTodoPaths()) {

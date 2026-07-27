@@ -116,6 +116,16 @@ export interface AgentTodo {
   status: 'pending' | 'in_progress' | 'completed';
 }
 
+// ── Achievements ─────────────────────────────────────────────
+
+export interface AchievementInfo {
+  id: string;
+  name: string;
+  description: string;
+  /** Epoch ms when unlocked; absent = still locked. */
+  unlockedAt?: number;
+}
+
 // ── Usage tracking (Electron only) ───────────────────────────
 
 export interface ProjectUsage {
@@ -226,7 +236,10 @@ export type HostToWebviewMessage =
   /** Resumable sessions for a folder the user picked (reply to listResumableSessions). */
   | { type: 'sessionList'; folderPath: string; sessions: ResumableSession[] }
   // Usage
-  | { type: 'usageSummary'; summary: UsageSummary };
+  | { type: 'usageSummary'; summary: UsageSummary }
+  // Achievements
+  | { type: 'achievementsLoaded'; achievements: AchievementInfo[] }
+  | { type: 'achievementUnlocked'; achievement: AchievementInfo };
 
 // ── Webview → Host ───────────────────────────────────────────
 

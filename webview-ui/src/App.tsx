@@ -5,6 +5,7 @@ import type {
   ResumableSession,
   WorkspaceInfo,
 } from '../../shared/protocol.js';
+import { AchievementToast } from './components/AchievementToast.js';
 import { BottomToolbar } from './components/BottomToolbar.js';
 import { ResumePicker } from './components/chat/ResumePicker.js';
 import { DebugView } from './components/DebugView.js';
@@ -160,6 +161,9 @@ function App() {
     workspaceTodos,
     agentTodos,
     usageSummary,
+    achievements,
+    unlockQueue,
+    dismissUnlock,
   } = useExtensionMessages(campus, editor.setLastSavedLayout, isEditDirty);
 
   const [isDebugMode, setIsDebugMode] = useState(false);
@@ -401,7 +405,10 @@ function App() {
           isDebugMode={isDebugMode}
           onToggleDebugMode={handleToggleDebugMode}
           usageSummary={usageSummary}
+          achievements={achievements}
         />
+
+        <AchievementToast queue={unlockQueue} onDismiss={dismissUnlock} />
 
         {editor.isEditMode && editor.isDirty && (
           <EditActionBar editor={editor} editorState={editorState} />

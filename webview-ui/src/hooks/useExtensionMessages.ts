@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type {
+  AchievementInfo,
   AgentTodo,
   HostToWebviewMessage,
   TodoItem,
@@ -65,6 +66,12 @@ export interface ExtensionMessageState {
   agentTodos: Record<number, AgentTodo[]>;
   /** Latest usage summary pushed by the host (webviewReady + after each chat turn). */
   usageSummary: UsageSummary | null;
+  /** Full achievements list from the host ('achievementsLoaded' on ready). */
+  achievements: AchievementInfo[];
+  /** Transient queue of freshly unlocked achievements awaiting toast display. */
+  unlockQueue: AchievementInfo[];
+  /** Dismiss the currently displayed unlock toast (drops unlockQueue[0]). */
+  dismissUnlock: () => void;
 }
 
 /** Aggregate seat assignments across every office on the campus and persist. */
@@ -101,6 +108,12 @@ export function useExtensionMessages(
   const [workspaceTodos, setWorkspaceTodos] = useState<Record<string, TodoItem[]>>({});
   const [agentTodos, setAgentTodos] = useState<Record<number, AgentTodo[]>>({});
   const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
+  const [achievements, setAchievements] = useState<AchievementInfo[]>([]);
+  const [unlockQueue, setUnlockQueue] = useState<AchievementInfo[]>([]);
+
+  const dismissUnlock = useCallback(() => {
+    setUnlockQueue((prev) => prev.slice(1));
+  }, []);
 
   // Track whether initial layout has been loaded (ref to avoid re-render)
   const layoutReadyRef = useRef(false);
@@ -450,6 +463,18 @@ export function useExtensionMessages(
       } else if (msg.type === 'usageSummary') {
         setUsageSummary(msg.summary);
         campus.setTodayUsage(msg.summary.todayByWorkspace ?? {});
+      } else if (msg.type === 'achievementsLoaded') {
+        setAchievements(msg.achievements);
+      } else if (msg.type === 'achievementUnlocked') {
+        const unlocked = msg.achievement;
+        setAchievements((prev) => {
+          const idx = prev.findIndex((a) => a.id === unlocked.id);
+          if (idx === -1) return [...prev, unlocked];
+          const next = [...prev];
+          next[idx] = unlocked;
+          return next;
+        });
+        setUnlockQueue((prev) => [...prev, unlocked]);
       } else if (msg.type === 'furnitureAssetsLoaded') {
         try {
           const catalog = msg.catalog as FurnitureAsset[];
@@ -482,5 +507,8 @@ export function useExtensionMessages(
     workspaceTodos,
     agentTodos,
     usageSummary,
+    achievements,
+    unlockQueue,
+    dismissUnlock,
   };
 }

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-import type { UsageSummary } from '../../../shared/protocol.js';
+import type { AchievementInfo, UsageSummary } from '../../../shared/protocol.js';
 import { vscode } from '../vscodeApi.js';
 import { SettingsModal } from './SettingsModal.js';
 
@@ -11,6 +11,8 @@ interface BottomToolbarProps {
   onToggleDebugMode: () => void;
   /** Latest usage summary from the host (live-updated after each chat turn). */
   usageSummary: UsageSummary | null;
+  /** Full achievements list from the host (empty until loaded). */
+  achievements: AchievementInfo[];
 }
 
 const panelStyle: React.CSSProperties = {
@@ -50,6 +52,7 @@ export function BottomToolbar({
   isDebugMode,
   onToggleDebugMode,
   usageSummary,
+  achievements,
 }: BottomToolbarProps) {
   const [hovered, setHovered] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -125,6 +128,7 @@ export function BottomToolbar({
           isDebugMode={isDebugMode}
           onToggleDebugMode={onToggleDebugMode}
           usageSummary={usageSummary}
+          achievements={achievements}
         />
       </div>
     </div>

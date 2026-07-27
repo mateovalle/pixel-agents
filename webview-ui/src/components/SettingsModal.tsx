@@ -1,7 +1,14 @@
 import { useEffect, useState } from 'react';
 
-import type { HostToWebviewMessage, UsageSummary } from '../../../shared/protocol.js';
+import type {
+  AchievementInfo,
+  HostToWebviewMessage,
+  UsageSummary,
+} from '../../../shared/protocol.js';
 import {
+  ACHIEVEMENT_LIST_MAX_HEIGHT_PX,
+  ACHIEVEMENT_LOCKED_DESCRIPTION,
+  ACHIEVEMENT_LOCKED_OPACITY,
   USAGE_CHART_BAR_DIM_COLOR,
   USAGE_CHART_BAR_GAP_PX,
   USAGE_CHART_BAR_MIN_HEIGHT_PX,
@@ -156,6 +163,44 @@ function UsageSection({ liveSummary }: { liveSummary: UsageSummary | null }) {
   );
 }
 
+function AchievementsSection({ achievements }: { achievements: AchievementInfo[] }) {
+  if (achievements.length === 0) return null;
+
+  const unlockedCount = achievements.filter((a) => a.unlockedAt !== undefined).length;
+
+  return (
+    <div style={{ borderTop: '1px solid var(--pixel-border)', marginTop: 4, paddingTop: 4 }}>
+      <div style={{ ...usageRowStyle, color: 'rgba(255, 255, 255, 0.9)', fontSize: '20px' }}>
+        <span>Achievements</span>
+        <span>
+          {unlockedCount} / {achievements.length}
+        </span>
+      </div>
+      <div style={{ maxHeight: ACHIEVEMENT_LIST_MAX_HEIGHT_PX, overflowY: 'auto' }}>
+        {achievements.map((a) => {
+          const unlocked = a.unlockedAt !== undefined;
+          return (
+            <div
+              key={a.id}
+              style={{
+                padding: '3px 10px',
+                opacity: unlocked ? 1 : ACHIEVEMENT_LOCKED_OPACITY,
+              }}
+            >
+              <div style={{ fontSize: '18px', color: 'rgba(255, 255, 255, 0.9)' }}>
+                {unlocked ? '🏆' : '🔒'} {a.name}
+              </div>
+              <div style={{ fontSize: '15px', color: 'rgba(255, 255, 255, 0.6)' }}>
+                {unlocked ? a.description : ACHIEVEMENT_LOCKED_DESCRIPTION}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -163,6 +208,8 @@ interface SettingsModalProps {
   onToggleDebugMode: () => void;
   /** Live usage summary from useExtensionMessages (null until first push). */
   usageSummary: UsageSummary | null;
+  /** Full achievements list from useExtensionMessages (empty until loaded). */
+  achievements: AchievementInfo[];
 }
 
 const menuItemBase: React.CSSProperties = {
@@ -186,6 +233,7 @@ export function SettingsModal({
   isDebugMode,
   onToggleDebugMode,
   usageSummary,
+  achievements,
 }: SettingsModalProps) {
   const [hovered, setHovered] = useState<string | null>(null);
   // Bump to re-render after toggling sound (source of truth lives in notificationSound)
@@ -358,6 +406,7 @@ export function SettingsModal({
           )}
         </button>
         <UsageSection liveSummary={usageSummary} />
+        <AchievementsSection achievements={achievements} />
       </div>
     </>
   );

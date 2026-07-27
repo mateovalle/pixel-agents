@@ -168,6 +168,21 @@ export const USAGE_CHART_BAR_DIM_COLOR = 'rgba(255, 255, 255, 0.28)';
 export const USAGE_CHART_ZERO_BAR_COLOR = 'rgba(255, 255, 255, 0.1)';
 export const USAGE_CHART_LABEL_COLOR = 'rgba(255, 255, 255, 0.4)';
 
+// ── Achievements ─────────────────────────────────────────────
+/** How long an unlock toast stays visible before auto-dismissing */
+export const ACHIEVEMENT_TOAST_DURATION_MS = 5000;
+/** Slide-in animation duration for the unlock toast */
+export const ACHIEVEMENT_TOAST_SLIDE_SEC = 0.25;
+/** Amber accent border for the unlock toast */
+export const ACHIEVEMENT_TOAST_BORDER_COLOR = '#f9e2af';
+export const ACHIEVEMENT_TOAST_Z_INDEX = 60;
+/** Max height of the achievements list in the Settings modal */
+export const ACHIEVEMENT_LIST_MAX_HEIGHT_PX = 220;
+/** Opacity applied to locked achievement rows */
+export const ACHIEVEMENT_LOCKED_OPACITY = 0.45;
+/** Placeholder shown instead of a locked achievement's description */
+export const ACHIEVEMENT_LOCKED_DESCRIPTION = '???';
+
 // ── Tasks ────────────────────────────────────────────────────
 /** Right-side per-workspace tasks drawer */
 export const TASKS_DRAWER_WIDTH_PX = 360;
