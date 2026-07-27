@@ -1,12 +1,18 @@
 import { useEffect, useState } from 'react';
 
 import type { HostToWebviewMessage, UsageSummary } from '../../../shared/protocol.js';
+import {
+  USAGE_CHART_BAR_DIM_COLOR,
+  USAGE_CHART_BAR_GAP_PX,
+  USAGE_CHART_BAR_MIN_HEIGHT_PX,
+  USAGE_CHART_HEIGHT_PX,
+  USAGE_CHART_LABEL_COLOR,
+  USAGE_CHART_LABEL_FONT_PX,
+  USAGE_CHART_ZERO_BAR_COLOR,
+} from '../constants.js';
 import { isSoundEnabled, setSoundEnabled } from '../notificationSound.js';
+import { formatUsd } from '../office/toolUtils.js';
 import { vscode } from '../vscodeApi.js';
-
-function formatUsd(v: number): string {
-  return v >= 100 ? `$${v.toFixed(0)}` : v >= 10 ? `$${v.toFixed(1)}` : `$${v.toFixed(2)}`;
-}
 
 const usageRowStyle: React.CSSProperties = {
   display: 'flex',
@@ -17,14 +23,86 @@ const usageRowStyle: React.CSSProperties = {
   color: 'rgba(255, 255, 255, 0.7)',
 };
 
-function UsageSection() {
-  const [summary, setSummary] = useState<UsageSummary | null>(null);
+/** Compact 14-day spend bar chart — pure divs, pixel aesthetic (sharp corners). */
+function DailyBarChart({ days }: { days: UsageSummary['days'] }) {
+  const max = Math.max(0, ...days.map((d) => d.usd));
+  if (days.length === 0 || max <= 0) return null;
+
+  return (
+    <div style={{ padding: '4px 10px 0' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'flex-end',
+          gap: USAGE_CHART_BAR_GAP_PX,
+          height: USAGE_CHART_HEIGHT_PX,
+          borderBottom: '1px solid var(--pixel-border)',
+        }}
+      >
+        {days.map((d, i) => {
+          const isToday = i === days.length - 1;
+          const barH =
+            d.usd > 0
+              ? Math.max(
+                  USAGE_CHART_BAR_MIN_HEIGHT_PX,
+                  Math.round((d.usd / max) * USAGE_CHART_HEIGHT_PX),
+                )
+              : USAGE_CHART_BAR_MIN_HEIGHT_PX;
+          return (
+            // Full-height hover target so tooltips work on short bars too
+            <div
+              key={`${d.day}-${i}`}
+              title={`${d.day} · $${d.usd.toFixed(2)}`}
+              style={{
+                flex: 1,
+                height: '100%',
+                display: 'flex',
+                alignItems: 'flex-end',
+                cursor: 'default',
+              }}
+            >
+              <div
+                style={{
+                  width: '100%',
+                  height: barH,
+                  borderRadius: 0,
+                  background: isToday
+                    ? 'var(--pixel-accent)'
+                    : d.usd > 0
+                      ? USAGE_CHART_BAR_DIM_COLOR
+                      : USAGE_CHART_ZERO_BAR_COLOR,
+                }}
+              />
+            </div>
+          );
+        })}
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          fontSize: USAGE_CHART_LABEL_FONT_PX,
+          color: USAGE_CHART_LABEL_COLOR,
+          marginTop: 2,
+        }}
+      >
+        <span>{days[0].day}</span>
+        <span>{days[days.length - 1].day}</span>
+      </div>
+    </div>
+  );
+}
+
+function UsageSection({ liveSummary }: { liveSummary: UsageSummary | null }) {
+  // Fallback: request a summary on open and listen for the reply, in case the
+  // live push hasn't arrived yet (e.g., host older than the push behavior)
+  const [fetched, setFetched] = useState<UsageSummary | null>(null);
 
   useEffect(() => {
     const handler = (e: MessageEvent) => {
       const msg = e.data as HostToWebviewMessage;
       if (msg.type === 'usageSummary') {
-        setSummary(msg.summary);
+        setFetched(msg.summary);
       }
     };
     window.addEventListener('message', handler);
@@ -32,6 +110,7 @@ function UsageSection() {
     return () => window.removeEventListener('message', handler);
   }, []);
 
+  const summary = liveSummary ?? fetched;
   if (!summary || summary.turnCount === 0) return null;
 
   return (
@@ -39,6 +118,7 @@ function UsageSection() {
       <div style={{ ...usageRowStyle, color: 'rgba(255, 255, 255, 0.9)', fontSize: '20px' }}>
         <span>Chat Usage</span>
       </div>
+      <DailyBarChart days={summary.days} />
       <div style={usageRowStyle}>
         <span>Today</span>
         <span>{formatUsd(summary.todayUsd)}</span>
@@ -81,6 +161,8 @@ interface SettingsModalProps {
   onClose: () => void;
   isDebugMode: boolean;
   onToggleDebugMode: () => void;
+  /** Live usage summary from useExtensionMessages (null until first push). */
+  usageSummary: UsageSummary | null;
 }
 
 const menuItemBase: React.CSSProperties = {
@@ -103,6 +185,7 @@ export function SettingsModal({
   onClose,
   isDebugMode,
   onToggleDebugMode,
+  usageSummary,
 }: SettingsModalProps) {
   const [hovered, setHovered] = useState<string | null>(null);
   // Bump to re-render after toggling sound (source of truth lives in notificationSound)
@@ -274,7 +357,7 @@ export function SettingsModal({
             />
           )}
         </button>
-        <UsageSection />
+        <UsageSection liveSummary={usageSummary} />
       </div>
     </>
   );

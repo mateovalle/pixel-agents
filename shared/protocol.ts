@@ -134,6 +134,10 @@ export interface UsageSummary {
   /** Sorted by monthUsd desc; capped by the host. */
   perProject: ProjectUsage[];
   turnCount: number;
+  /** Last 14 days, oldest first (local dates, 'MM-DD'). */
+  days: Array<{ day: string; usd: number }>;
+  /** Today's spend per workspace path (for office label plates). */
+  todayByWorkspace: Record<string, number>;
 }
 
 // ── Host → Webview ───────────────────────────────────────────

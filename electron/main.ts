@@ -349,6 +349,7 @@ function launchChatAgent(cwd: string, resumeSessionId?: string, initialPrompt?: 
     },
     onTurnComplete: (costUsd, durationMs) => {
       recordTurnUsage(cwd, costUsd, durationMs);
+      ctx.send({ type: 'usageSummary', summary: summarizeUsage() });
     },
     onExit: () => {
       // The SDK loop ended on its own (error or shutdown) — retire the
@@ -975,6 +976,7 @@ function onWebviewReady(): void {
 
   // Send registered workspaces (offices)
   ctx.send({ type: 'workspacesLoaded', workspaces: loadWorkspaces() });
+  ctx.send({ type: 'usageSummary', summary: summarizeUsage() });
 
   // Send human todos + live agent plans
   for (const p of getAllTodoPaths()) {

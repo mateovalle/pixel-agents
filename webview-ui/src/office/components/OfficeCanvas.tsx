@@ -26,6 +26,7 @@ import type {
 } from '../engine/renderer.js';
 import { renderFrame, renderOffice, renderOfficeLabel } from '../engine/renderer.js';
 import { getCatalogEntry, isRotatable } from '../layout/furnitureCatalog.js';
+import { formatUsd } from '../toolUtils.js';
 import { EditTool, TILE_SIZE } from '../types.js';
 
 interface OfficeCanvasProps {
@@ -222,9 +223,11 @@ export function OfficeCanvas({
               }
               renderOffice(ctx, entry.office, ox, oy, zoom);
               const count = campus.agentCount(entry.office);
+              const todayUsd = campus.getTodayUsd(entry.workspace.path);
+              const costSegment = todayUsd > 0 ? ` · ${formatUsd(todayUsd)}` : '';
               renderOfficeLabel(
                 ctx,
-                `${entry.workspace.name} · ${count}`,
+                `${entry.workspace.name} · ${count}${costSegment}`,
                 count === 0,
                 ox,
                 oy,

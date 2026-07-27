@@ -31,6 +31,18 @@ export class CampusState {
   activeWorkspacePath: string | null = null;
   /** Detached office used when no workspaces are registered (never rendered in campus view). */
   private fallbackOffice: OfficeState | null = null;
+  /** Today's chat spend (USD) per workspace path — shown on office label plates. */
+  private todayUsage: Record<string, number> = {};
+
+  /** Replace today's per-workspace spend map (from the host's usageSummary). */
+  setTodayUsage(map: Record<string, number>): void {
+    this.todayUsage = map;
+  }
+
+  /** Today's spend for a workspace path (0 when unknown). */
+  getTodayUsd(path: string): number {
+    return this.todayUsage[path] ?? 0;
+  }
 
   /** The layout a given workspace's office should use: override, else default. */
   private layoutFor(path: string): OfficeLayout | null {

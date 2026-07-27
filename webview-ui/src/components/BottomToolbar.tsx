@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import type { UsageSummary } from '../../../shared/protocol.js';
 import { vscode } from '../vscodeApi.js';
 import { SettingsModal } from './SettingsModal.js';
 
@@ -8,6 +9,8 @@ interface BottomToolbarProps {
   onToggleEditMode: () => void;
   isDebugMode: boolean;
   onToggleDebugMode: () => void;
+  /** Latest usage summary from the host (live-updated after each chat turn). */
+  usageSummary: UsageSummary | null;
 }
 
 const panelStyle: React.CSSProperties = {
@@ -46,6 +49,7 @@ export function BottomToolbar({
   onToggleEditMode,
   isDebugMode,
   onToggleDebugMode,
+  usageSummary,
 }: BottomToolbarProps) {
   const [hovered, setHovered] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -120,6 +124,7 @@ export function BottomToolbar({
           onClose={() => setIsSettingsOpen(false)}
           isDebugMode={isDebugMode}
           onToggleDebugMode={onToggleDebugMode}
+          usageSummary={usageSummary}
         />
       </div>
     </div>

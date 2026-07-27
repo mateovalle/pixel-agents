@@ -69,12 +69,24 @@ export function summarizeUsage(now = new Date()): UsageSummary {
   let allTimeUsd = 0;
   let turnCount = 0;
   const byProject = new Map<string, { monthUsd: number; allTimeUsd: number }>();
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const DAYS_IN_SERIES = 14;
+  const dayBuckets = new Array<number>(DAYS_IN_SERIES).fill(0);
+  const seriesStart = startOfDay - (DAYS_IN_SERIES - 1) * DAY_MS;
+  const todayByWorkspace: Record<string, number> = {};
 
   for (const e of readEntries()) {
     turnCount++;
     allTimeUsd += e.c;
     if (e.t >= startOfMonth) monthUsd += e.c;
-    if (e.t >= startOfDay) todayUsd += e.c;
+    if (e.t >= startOfDay) {
+      todayUsd += e.c;
+      todayByWorkspace[e.p] = (todayByWorkspace[e.p] ?? 0) + e.c;
+    }
+    if (e.t >= seriesStart) {
+      const idx = Math.min(DAYS_IN_SERIES - 1, Math.floor((e.t - seriesStart) / DAY_MS));
+      dayBuckets[idx] += e.c;
+    }
 
     let proj = byProject.get(e.p);
     if (!proj) {
@@ -95,5 +107,12 @@ export function summarizeUsage(now = new Date()): UsageSummary {
     .sort((a, b) => b.monthUsd - a.monthUsd || b.allTimeUsd - a.allTimeUsd)
     .slice(0, MAX_PROJECTS_IN_SUMMARY);
 
-  return { todayUsd, monthUsd, allTimeUsd, perProject, turnCount };
+  const days = dayBuckets.map((usd, i) => {
+    const d = new Date(seriesStart + i * DAY_MS);
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return { day: `${mm}-${dd}`, usd };
+  });
+
+  return { todayUsd, monthUsd, allTimeUsd, perProject, turnCount, days, todayByWorkspace };
 }

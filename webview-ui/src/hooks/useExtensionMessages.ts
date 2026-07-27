@@ -4,6 +4,7 @@ import type {
   AgentTodo,
   HostToWebviewMessage,
   TodoItem,
+  UsageSummary,
   WorkspaceInfo,
 } from '../../../shared/protocol.js';
 import { playDoneSound, setSoundEnabled } from '../notificationSound.js';
@@ -62,6 +63,8 @@ export interface ExtensionMessageState {
   workspaceTodos: Record<string, TodoItem[]>;
   /** Agent plan items (TodoWrite) per agent id (replaced wholesale on each message). */
   agentTodos: Record<number, AgentTodo[]>;
+  /** Latest usage summary pushed by the host (webviewReady + after each chat turn). */
+  usageSummary: UsageSummary | null;
 }
 
 /** Aggregate seat assignments across every office on the campus and persist. */
@@ -97,6 +100,7 @@ export function useExtensionMessages(
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [workspaceTodos, setWorkspaceTodos] = useState<Record<string, TodoItem[]>>({});
   const [agentTodos, setAgentTodos] = useState<Record<number, AgentTodo[]>>({});
+  const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
 
   // Track whether initial layout has been loaded (ref to avoid re-render)
   const layoutReadyRef = useRef(false);
@@ -443,6 +447,9 @@ export function useExtensionMessages(
         setAgentTodos((prev) => ({ ...prev, [agentId]: todos }));
       } else if (msg.type === 'settingsLoaded') {
         setSoundEnabled(msg.soundEnabled);
+      } else if (msg.type === 'usageSummary') {
+        setUsageSummary(msg.summary);
+        campus.setTodayUsage(msg.summary.todayByWorkspace ?? {});
       } else if (msg.type === 'furnitureAssetsLoaded') {
         try {
           const catalog = msg.catalog as FurnitureAsset[];
@@ -474,5 +481,6 @@ export function useExtensionMessages(
     workspaces,
     workspaceTodos,
     agentTodos,
+    usageSummary,
   };
 }

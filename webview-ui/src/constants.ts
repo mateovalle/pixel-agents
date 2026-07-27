@@ -154,6 +154,20 @@ export const CAMPUS_FIT_PAD_FRACTION = 0.05;
 export const OFFICE_POPUP_WIDTH_PX = 190;
 export const OFFICE_POPUP_MARGIN_PX = 8;
 
+// ── Usage UI ─────────────────────────────────────────────────
+/** Spend at or above this renders with 1 decimal ($12.3); below → 2 ($0.00) */
+export const USAGE_USD_ONE_DECIMAL_THRESHOLD = 10;
+/** Spend at or above this renders with no decimals ($123) */
+export const USAGE_USD_NO_DECIMAL_THRESHOLD = 100;
+/** Daily spend bar chart (Settings modal) */
+export const USAGE_CHART_HEIGHT_PX = 120;
+export const USAGE_CHART_BAR_GAP_PX = 3;
+export const USAGE_CHART_BAR_MIN_HEIGHT_PX = 2;
+export const USAGE_CHART_LABEL_FONT_PX = 14;
+export const USAGE_CHART_BAR_DIM_COLOR = 'rgba(255, 255, 255, 0.28)';
+export const USAGE_CHART_ZERO_BAR_COLOR = 'rgba(255, 255, 255, 0.1)';
+export const USAGE_CHART_LABEL_COLOR = 'rgba(255, 255, 255, 0.4)';
+
 // ── Tasks ────────────────────────────────────────────────────
 /** Right-side per-workspace tasks drawer */
 export const TASKS_DRAWER_WIDTH_PX = 360;

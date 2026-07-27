@@ -159,6 +159,7 @@ function App() {
     workspaces,
     workspaceTodos,
     agentTodos,
+    usageSummary,
   } = useExtensionMessages(campus, editor.setLastSavedLayout, isEditDirty);
 
   const [isDebugMode, setIsDebugMode] = useState(false);
@@ -399,6 +400,7 @@ function App() {
           onToggleEditMode={editor.handleToggleEditMode}
           isDebugMode={isDebugMode}
           onToggleDebugMode={handleToggleDebugMode}
+          usageSummary={usageSummary}
         />
 
         {editor.isEditMode && editor.isDirty && (
