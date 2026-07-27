@@ -41,6 +41,7 @@ import {
   type TrackerContext,
 } from '../src/core/types.js';
 import { type ChatSession, startChatSession } from './chatAgent.js';
+import { addTodo, deleteTodo, getAllTodoPaths, getTodos, toggleTodo } from './todos.js';
 import { recordTurnUsage, summarizeUsage } from './usage.js';
 import {
   loadWorkspaces,
@@ -321,7 +322,7 @@ function launchAgent(cwd: string): void {
   ensureProjectScan(agent.projectDir);
 }
 
-function launchChatAgent(cwd: string, resumeSessionId?: string): void {
+function launchChatAgent(cwd: string, resumeSessionId?: string, initialPrompt?: string): void {
   const sessionId = resumeSessionId ?? crypto.randomUUID();
   const agent = registerAgent('chat', cwd, sessionId, !!resumeSessionId);
   const label = `Agent ${nextTerminalIndex++}`;
@@ -357,6 +358,9 @@ function launchChatAgent(cwd: string, resumeSessionId?: string): void {
     workspacePath: cwd,
   });
   ctx.send({ type: 'workspacesLoaded', workspaces: touchWorkspace(cwd) });
+  if (initialPrompt) {
+    session.send(initialPrompt);
+  }
 }
 
 /** Poll until the agent's JSONL file appears, then start watching it. */
@@ -697,6 +701,17 @@ function handleWebviewMessage(msg: WebviewToHostMessage): void {
         ctx.send({ type: 'workspacesLoaded', workspaces: touchWorkspace(cwd) });
       }
     })();
+  } else if (msg.type === 'addTodo') {
+    ctx.send({ type: 'workspaceTodos', path: msg.path, todos: addTodo(msg.path, msg.text) });
+  } else if (msg.type === 'toggleTodo') {
+    ctx.send({ type: 'workspaceTodos', path: msg.path, todos: toggleTodo(msg.path, msg.id) });
+  } else if (msg.type === 'deleteTodo') {
+    ctx.send({ type: 'workspaceTodos', path: msg.path, todos: deleteTodo(msg.path, msg.id) });
+  } else if (msg.type === 'assignTodo') {
+    const todo = getTodos(msg.path).find((t) => t.id === msg.id);
+    if (todo) {
+      launchChatAgent(msg.path, undefined, todo.text);
+    }
   } else if (msg.type === 'removeWorkspace') {
     ctx.send({ type: 'workspacesLoaded', workspaces: removeWorkspaceEntry(msg.path) });
   } else if (msg.type === 'resumeChatAgent') {
@@ -812,6 +827,16 @@ function onWebviewReady(): void {
 
   // Send registered workspaces (offices)
   ctx.send({ type: 'workspacesLoaded', workspaces: loadWorkspaces() });
+
+  // Send human todos + live agent plans
+  for (const p of getAllTodoPaths()) {
+    ctx.send({ type: 'workspaceTodos', path: p, todos: getTodos(p) });
+  }
+  for (const [agentId, session] of chatSessions) {
+    if (session.latestTodos.length > 0) {
+      ctx.send({ type: 'agent-todos', agentId, todos: session.latestTodos });
+    }
+  }
 
   // Re-send current agent statuses
   for (const [agentId, agent] of ctx.agents) {

@@ -9,6 +9,8 @@ import { BottomToolbar } from './components/BottomToolbar.js';
 import { ResumePicker } from './components/chat/ResumePicker.js';
 import { DebugView } from './components/DebugView.js';
 import { OfficePopup } from './components/OfficePopup.js';
+import type { AgentTaskGroup } from './components/TasksDrawer.js';
+import { TasksDrawer } from './components/TasksDrawer.js';
 import { TerminalPanel } from './components/TerminalPanel.js';
 import { TerminalSplitter } from './components/TerminalSplitter.js';
 import { ZoomControls } from './components/ZoomControls.js';
@@ -155,6 +157,8 @@ function App() {
     layoutReady,
     loadedAssets,
     workspaces,
+    workspaceTodos,
+    agentTodos,
   } = useExtensionMessages(campus, editor.setLastSavedLayout, isEditDirty);
 
   const [isDebugMode, setIsDebugMode] = useState(false);
@@ -182,6 +186,12 @@ function App() {
   }, []);
 
   const handleCloseOfficePopup = useCallback(() => setOfficePopup(null), []);
+
+  // Per-workspace tasks drawer — one open at a time; opening for another
+  // workspace replaces the current one.
+  const [tasksDrawerPath, setTasksDrawerPath] = useState<string | null>(null);
+  const handleOpenTasks = useCallback((path: string) => setTasksDrawerPath(path), []);
+  const handleCloseTasksDrawer = useCallback(() => setTasksDrawerPath(null), []);
 
   // Close the popup if its workspace was removed
   useEffect(() => {
@@ -295,6 +305,22 @@ function App() {
       }
       return false;
     })();
+
+  // Tasks drawer data — resolves to null when the workspace was removed.
+  const tasksWorkspace = tasksDrawerPath
+    ? (workspaces.find((w) => w.path === tasksDrawerPath) ?? null)
+    : null;
+  // Map agentId → workspace via the campus: an agent's office entry carries
+  // the workspace it was routed to on creation.
+  const tasksAgentGroups: AgentTaskGroup[] = tasksWorkspace
+    ? Object.entries(agentTodos)
+        .filter(
+          ([idStr, todos]) =>
+            todos.length > 0 &&
+            campus.getEntryForAgent(Number(idStr))?.workspace.path === tasksWorkspace.path,
+        )
+        .map(([idStr, todos]) => ({ agentId: Number(idStr), label: `Agent ${idStr}`, todos }))
+    : [];
 
   if (!layoutReady) {
     return (
@@ -445,7 +471,21 @@ function App() {
             workspace={officePopup.workspace}
             x={officePopup.x}
             y={officePopup.y}
+            openTaskCount={
+              (workspaceTodos[officePopup.workspace.path] ?? []).filter((t) => t.status === 'open')
+                .length
+            }
+            onOpenTasks={() => handleOpenTasks(officePopup.workspace.path)}
             onClose={handleCloseOfficePopup}
+          />
+        )}
+
+        {tasksWorkspace && !editor.isEditMode && (
+          <TasksDrawer
+            workspace={tasksWorkspace}
+            todos={workspaceTodos[tasksWorkspace.path] ?? []}
+            agentGroups={tasksAgentGroups}
+            onClose={handleCloseTasksDrawer}
           />
         )}
 

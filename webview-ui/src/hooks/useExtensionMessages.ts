@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 
-import type { HostToWebviewMessage, WorkspaceInfo } from '../../../shared/protocol.js';
+import type {
+  AgentTodo,
+  HostToWebviewMessage,
+  TodoItem,
+  WorkspaceInfo,
+} from '../../../shared/protocol.js';
 import { playDoneSound, setSoundEnabled } from '../notificationSound.js';
 import type { CampusState } from '../office/engine/campusState.js';
 import { setFloorSprites } from '../office/floorTiles.js';
@@ -53,6 +58,10 @@ export interface ExtensionMessageState {
   loadedAssets?: { catalog: FurnitureAsset[]; sprites: Record<string, string[][]> };
   workspaceFolders: WorkspaceFolder[];
   workspaces: WorkspaceInfo[];
+  /** Human todos per workspace path (replaced wholesale on each message). */
+  workspaceTodos: Record<string, TodoItem[]>;
+  /** Agent plan items (TodoWrite) per agent id (replaced wholesale on each message). */
+  agentTodos: Record<number, AgentTodo[]>;
 }
 
 /** Aggregate seat assignments across every office on the campus and persist. */
@@ -86,6 +95,8 @@ export function useExtensionMessages(
   >();
   const [workspaceFolders, setWorkspaceFolders] = useState<WorkspaceFolder[]>([]);
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
+  const [workspaceTodos, setWorkspaceTodos] = useState<Record<string, TodoItem[]>>({});
+  const [agentTodos, setAgentTodos] = useState<Record<number, AgentTodo[]>>({});
 
   // Track whether initial layout has been loaded (ref to avoid re-render)
   const layoutReadyRef = useRef(false);
@@ -184,6 +195,12 @@ export function useExtensionMessages(
           return next;
         });
         setSubagentTools((prev) => {
+          if (!(id in prev)) return prev;
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+        setAgentTodos((prev) => {
           if (!(id in prev)) return prev;
           const next = { ...prev };
           delete next[id];
@@ -416,6 +433,14 @@ export function useExtensionMessages(
         setWallSprites(sprites);
       } else if (msg.type === 'workspaceFolders') {
         setWorkspaceFolders(msg.folders);
+      } else if (msg.type === 'workspaceTodos') {
+        const path = msg.path;
+        const todos = msg.todos;
+        setWorkspaceTodos((prev) => ({ ...prev, [path]: todos }));
+      } else if (msg.type === 'agent-todos') {
+        const agentId = msg.agentId;
+        const todos = msg.todos;
+        setAgentTodos((prev) => ({ ...prev, [agentId]: todos }));
       } else if (msg.type === 'settingsLoaded') {
         setSoundEnabled(msg.soundEnabled);
       } else if (msg.type === 'furnitureAssetsLoaded') {
@@ -447,5 +472,7 @@ export function useExtensionMessages(
     loadedAssets,
     workspaceFolders,
     workspaces,
+    workspaceTodos,
+    agentTodos,
   };
 }

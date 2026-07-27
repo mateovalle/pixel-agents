@@ -154,6 +154,14 @@ export const CAMPUS_FIT_PAD_FRACTION = 0.05;
 export const OFFICE_POPUP_WIDTH_PX = 190;
 export const OFFICE_POPUP_MARGIN_PX = 8;
 
+// ── Tasks ────────────────────────────────────────────────────
+/** Right-side per-workspace tasks drawer */
+export const TASKS_DRAWER_WIDTH_PX = 360;
+export const TASKS_CHECKBOX_SIZE_PX = 16;
+export const TASKS_HEADER_FONT_SIZE_PX = 24;
+export const TASKS_ITEM_FONT_SIZE_PX = 20;
+export const TASKS_SECTION_FONT_SIZE_PX = 18;
+
 // ── Game Logic ───────────────────────────────────────────────
 export const MAX_DELTA_TIME_SEC = 0.1;
 export const WAITING_BUBBLE_DURATION_SEC = 2.0;

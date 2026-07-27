@@ -9,6 +9,9 @@ interface OfficePopupProps {
   /** CSS position within the office container (already clamped by the caller). */
   x: number;
   y: number;
+  /** Number of open human todos in this workspace (shown on the Tasks button). */
+  openTaskCount: number;
+  onOpenTasks: () => void;
   onClose: () => void;
 }
 
@@ -29,7 +32,14 @@ const btnStyle: React.CSSProperties = {
  * Pixel-styled action popup for a workspace's office, opened by clicking its
  * floor: [+ Agent] [Resume] [Remove]. Closes on Esc / outside click.
  */
-export function OfficePopup({ workspace, x, y, onClose }: OfficePopupProps) {
+export function OfficePopup({
+  workspace,
+  x,
+  y,
+  openTaskCount,
+  onOpenTasks,
+  onClose,
+}: OfficePopupProps) {
   const popupRef = useRef<HTMLDivElement>(null);
   const [hovered, setHovered] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -109,6 +119,18 @@ export function OfficePopup({ workspace, x, y, onClose }: OfficePopupProps) {
         title="Open a chat agent in this workspace"
       >
         + Agent
+      </button>
+      <button
+        style={{ ...btnStyle, background: hoverBg('tasks', 'var(--pixel-btn-bg)') }}
+        onMouseEnter={() => setHovered('tasks')}
+        onMouseLeave={() => setHovered(null)}
+        onClick={() => {
+          onOpenTasks();
+          onClose();
+        }}
+        title="View and manage tasks for this workspace"
+      >
+        {openTaskCount > 0 ? `Tasks (${openTaskCount})` : 'Tasks'}
       </button>
       <button
         style={{ ...btnStyle, background: hoverBg('resume', 'var(--pixel-btn-bg)') }}

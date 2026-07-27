@@ -18,7 +18,12 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk' with { 'resolution-mode': 'import' };
 import * as path from 'path';
 
-import type { ChatEvent, ChatImageAttachment, ChatPermissionMode } from '../shared/protocol.js';
+import type {
+  AgentTodo,
+  ChatEvent,
+  ChatImageAttachment,
+  ChatPermissionMode,
+} from '../shared/protocol.js';
 import type { Send } from '../src/core/types.js';
 
 const CHAT_HISTORY_MAX_EVENTS = 2000;
@@ -86,6 +91,8 @@ export interface ChatSession {
   /** Last time the user sent a prompt — used for /clear attribution. */
   lastInputAt: number;
   mode: ChatPermissionMode;
+  /** Latest TodoWrite plan (resent on webviewReady). */
+  latestTodos: AgentTodo[];
   send(text: string, images?: ChatImageAttachment[]): void;
   interrupt(): void;
   setMode(mode: ChatPermissionMode): void;
@@ -120,6 +127,7 @@ export function startChatSession(opts: {
     busy: false,
     lastInputAt: Date.now(),
     mode: 'default',
+    latestTodos: [],
 
     send(text: string, images?: ChatImageAttachment[]): void {
       if (disposed) return;
@@ -251,6 +259,13 @@ export function startChatSession(opts: {
         } else if (block.type === 'thinking' && block.thinking.trim()) {
           emit({ kind: 'block-final', block: 'thinking', text: block.thinking });
         } else if (block.type === 'tool_use') {
+          if (block.name === 'TodoWrite') {
+            const todos = (block.input as { todos?: AgentTodo[] })?.todos;
+            if (Array.isArray(todos)) {
+              session.latestTodos = todos;
+              send({ type: 'agent-todos', agentId, todos });
+            }
+          }
           emit({
             kind: 'tool-start',
             toolId: block.id,

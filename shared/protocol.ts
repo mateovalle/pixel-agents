@@ -100,6 +100,22 @@ export interface ResumableSession {
   preview: string;
 }
 
+// ── Todos ────────────────────────────────────────────────────
+
+/** A human todo item scoped to a workspace. */
+export interface TodoItem {
+  id: string;
+  text: string;
+  status: 'open' | 'done';
+  createdAt: number;
+}
+
+/** An agent's own plan item (mirrored from Claude Code's TodoWrite). */
+export interface AgentTodo {
+  content: string;
+  status: 'pending' | 'in_progress' | 'completed';
+}
+
 // ── Usage tracking (Electron only) ───────────────────────────
 
 export interface ProjectUsage {
@@ -195,6 +211,10 @@ export type HostToWebviewMessage =
     }
   /** The request was resolved elsewhere (abort/turn end) — remove the card. */
   | { type: 'chat-permission-resolved'; agentId: number; requestId: string }
+  /** An agent updated its internal plan (TodoWrite) — live activity feed. */
+  | { type: 'agent-todos'; agentId: number; todos: AgentTodo[] }
+  /** Human todos for a workspace (sent on ready and after any change). */
+  | { type: 'workspaceTodos'; path: string; todos: TodoItem[] }
   /** Registered workspaces (sent on ready and after add/remove/use). */
   | { type: 'workspacesLoaded'; workspaces: WorkspaceInfo[] }
   /** Current permission mode of a chat session (sent on init and change). */
@@ -244,5 +264,10 @@ export type WebviewToHostMessage =
   /** Register a new workspace via folder picker (host replies 'workspacesLoaded'). */
   | { type: 'addWorkspace' }
   | { type: 'removeWorkspace'; path: string }
+  | { type: 'addTodo'; path: string; text: string }
+  | { type: 'toggleTodo'; path: string; id: string }
+  | { type: 'deleteTodo'; path: string; id: string }
+  /** Spawn a chat agent in the workspace with the todo's text as first prompt. */
+  | { type: 'assignTodo'; path: string; id: string }
   /** Resume a past session as a new chat agent. */
   | { type: 'resumeChatAgent'; folderPath: string; sessionId: string };
