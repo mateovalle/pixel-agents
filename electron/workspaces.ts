@@ -41,15 +41,16 @@ function save(): void {
 }
 
 /** Adds (or touches) a workspace; returns the updated list. */
-export function touchWorkspace(workspacePath: string): WorkspaceInfo[] {
+export function touchWorkspace(workspacePath: string, name?: string): WorkspaceInfo[] {
   const list = loadWorkspaces();
   const existing = list.find((w) => w.path === workspacePath);
   if (existing) {
     existing.lastUsedAt = Date.now();
+    if (name) existing.name = name;
   } else {
     list.push({
       path: workspacePath,
-      name: path.basename(workspacePath),
+      name: name ?? path.basename(workspacePath),
       addedAt: Date.now(),
       lastUsedAt: Date.now(),
     });

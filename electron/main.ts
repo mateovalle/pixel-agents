@@ -553,13 +553,19 @@ function trackAchievement(
 // A global chat session with campus-wide tools: it reads project/agent
 // state, backlogs and usage, and can dispatch new agents to workspaces.
 function openAssistant(): void {
-  const id = nextAgentId++;
+  // The assistant lives in a 'Reception' office on the campus; her session
+  // transcript lands in the home project dir, so the existing watcher
+  // animates her character whenever she works. Clicking her focuses the chat.
+  const receptionPath = os.homedir();
+  ctx.send({ type: 'workspacesLoaded', workspaces: touchWorkspace(receptionPath, 'Reception') });
+  const agent = registerAgent('chat', receptionPath, crypto.randomUUID());
+  const id = agent.id;
   assistantAgentId = id;
 
   const session = startChatSession({
     agentId: id,
-    sessionId: crypto.randomUUID(),
-    cwd: os.homedir(),
+    sessionId: agent.sessionId,
+    cwd: receptionPath,
     label: 'Assistant',
     send: ctx.send,
     systemPromptAppend:
@@ -664,10 +670,21 @@ function openAssistant(): void {
     onExit: () => {
       chatSessions.delete(id);
       if (assistantAgentId === id) assistantAgentId = null;
+      if (ctx.agents.has(id)) {
+        removeAgent(id);
+        ctx.send({ type: 'agentClosed', id });
+      }
     },
   });
   chatSessions.set(id, session);
   ctx.send({ type: 'chat-created', agentId: id, label: 'Assistant' });
+  ctx.send({
+    type: 'agentCreated',
+    id,
+    agentKind: 'chat',
+    folderName: 'Reception',
+    workspacePath: receptionPath,
+  });
 }
 
 // ── Session resume ───────────────────────────────────────────
