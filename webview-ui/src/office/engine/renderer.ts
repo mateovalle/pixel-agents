@@ -14,8 +14,6 @@ import {
   CAMPUS_LABEL_FONT_MIN_PX,
   CAMPUS_LABEL_FONT_ZOOM_FACTOR,
   CAMPUS_LABEL_OFFSET_PX,
-  CAMPUS_LABEL_PAD_X_FACTOR,
-  CAMPUS_LABEL_PAD_Y_FACTOR,
   CAMPUS_LABEL_SHADOW,
   CAMPUS_LABEL_SHADOW_PX,
   CAMPUS_LABEL_TEXT,
@@ -611,9 +609,12 @@ export function renderOfficeLabel(
   zoom: number,
   officeDeviceWidth: number,
 ): void {
-  const fontPx = Math.max(CAMPUS_LABEL_FONT_MIN_PX, zoom * CAMPUS_LABEL_FONT_ZOOM_FACTOR);
-  const padX = Math.max(CAMPUS_LABEL_PAD_X_FACTOR, zoom * CAMPUS_LABEL_PAD_X_FACTOR);
-  const padY = Math.max(CAMPUS_LABEL_PAD_Y_FACTOR, zoom * CAMPUS_LABEL_PAD_Y_FACTOR);
+  // Constant on-screen size: the canvas is in DEVICE pixels, so scale the
+  // CSS-pixel minimum by devicePixelRatio (else retina renders it half-size).
+  const dpr = window.devicePixelRatio || 1;
+  const fontPx = Math.max(CAMPUS_LABEL_FONT_MIN_PX * dpr, zoom * CAMPUS_LABEL_FONT_ZOOM_FACTOR);
+  const padX = fontPx * 0.6;
+  const padY = fontPx * 0.3;
 
   ctx.save();
   ctx.font = `${fontPx}px ${CAMPUS_LABEL_FONT_FAMILY}`;
@@ -624,7 +625,7 @@ export function renderOfficeLabel(
   const plateW = Math.round(textW + padX * 2);
   const plateH = Math.round(fontPx + padY * 2);
   const plateX = Math.round(offsetX + officeDeviceWidth / 2 - plateW / 2);
-  const plateY = Math.round(offsetY - CAMPUS_LABEL_OFFSET_PX * zoom - plateH);
+  const plateY = Math.round(offsetY - CAMPUS_LABEL_OFFSET_PX * dpr - plateH);
 
   ctx.globalAlpha = dim ? 0.6 : 1;
   // Hard offset shadow

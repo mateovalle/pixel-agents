@@ -135,13 +135,11 @@ export const CAMPUS_GRID_COLS = 3;
 /** Extra sprite-px padding around an office when culling (walls + label overhang) */
 export const CAMPUS_CULL_PAD_PX = 48;
 /** Label plate: distance above the office top edge, in sprite px */
-export const CAMPUS_LABEL_OFFSET_PX = 22;
+export const CAMPUS_LABEL_OFFSET_PX = 8;
 /** Label plate font size = zoom * factor, floored at min (device px) */
 export const CAMPUS_LABEL_FONT_ZOOM_FACTOR = 6;
-export const CAMPUS_LABEL_FONT_MIN_PX = 12;
+export const CAMPUS_LABEL_FONT_MIN_PX = 15;
 /** Label plate padding (device px per zoom step) */
-export const CAMPUS_LABEL_PAD_X_FACTOR = 4;
-export const CAMPUS_LABEL_PAD_Y_FACTOR = 2.5;
 export const CAMPUS_LABEL_BORDER_PX = 2;
 export const CAMPUS_LABEL_SHADOW_PX = 2;
 export const CAMPUS_LABEL_BG = '#1e1e2e';
