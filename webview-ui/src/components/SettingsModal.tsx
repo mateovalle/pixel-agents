@@ -274,6 +274,9 @@ export function SettingsModal({
           padding: '4px',
           boxShadow: 'var(--pixel-shadow)',
           minWidth: 200,
+          maxWidth: 340,
+          maxHeight: '82vh',
+          overflowY: 'auto',
         }}
       >
         {/* Header with title and X button */}
