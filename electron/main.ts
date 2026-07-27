@@ -112,6 +112,7 @@ const ptyToAgent = new Map<string, number>(); // ptyId → agentId
 
 // Chat (Agent SDK) state
 const chatSessions = new Map<number, ChatSession>(); // agentId → session
+let assistantAgentId: number | null = null;
 
 // ── Small JSON persistence helpers ───────────────────────────
 function loadJsonFile<T>(file: string): T | null {
@@ -534,6 +535,127 @@ function reassignAgentToFile(agent: AgentState, newFilePath: string): void {
   readNewLines(ctx, agent.id);
 }
 
+// ── The Assistant ────────────────────────────────────────────
+// A global chat session with campus-wide tools: it reads project/agent
+// state, backlogs and usage, and can dispatch new agents to workspaces.
+function openAssistant(): void {
+  const id = nextAgentId++;
+  assistantAgentId = id;
+
+  const session = startChatSession({
+    agentId: id,
+    sessionId: crypto.randomUUID(),
+    cwd: os.homedir(),
+    label: 'Assistant',
+    send: ctx.send,
+    systemPromptAppend:
+      'You are the campus assistant of Pixel Agents, a mission-control app where a ' +
+      'developer runs multiple Claude Code agents across project workspaces (offices). ' +
+      'Your job is orchestration: keep an overview of workspaces, agents, tasks and ' +
+      'spending via your campus tools, help the user prioritize, and dispatch work by ' +
+      'creating agents with clear, self-contained task prompts. Prefer checking real ' +
+      'state with tools over assuming. Be concise.',
+    toolsFactory: (sdk, z) => ({
+      mcpServers: {
+        campus: sdk.createSdkMcpServer({
+          name: 'campus',
+          tools: [
+            sdk.tool(
+              'list_workspaces',
+              'List registered workspaces with agent and open-task counts.',
+              {},
+              async () => {
+                const data = loadWorkspaces().map((w) => ({
+                  path: w.path,
+                  name: w.name,
+                  agents: [...ctx.agents.values()].filter((a) => a.cwd === w.path).length,
+                  openTasks: getTodos(w.path).filter((t) => t.status === 'open').length,
+                }));
+                return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+              },
+            ),
+            sdk.tool(
+              'agents_status',
+              'Live status of every active agent: workspace, busy state, and current plan.',
+              {},
+              async () => {
+                const data = [...chatSessions.values()]
+                  .filter((cs) => cs.agentId !== assistantAgentId)
+                  .map((cs) => ({
+                    agentId: cs.agentId,
+                    workspace: cs.cwd,
+                    busy: cs.busy,
+                    plan: cs.latestTodos,
+                  }));
+                return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+              },
+            ),
+            sdk.tool(
+              'list_tasks',
+              'List the shared task list of a workspace.',
+              { workspacePath: z.string() },
+              async (args) => ({
+                content: [
+                  { type: 'text', text: JSON.stringify(getTodos(args.workspacePath), null, 2) },
+                ],
+              }),
+            ),
+            sdk.tool(
+              'add_task',
+              'Add a task to a workspace backlog.',
+              { workspacePath: z.string(), text: z.string() },
+              async (args) => {
+                ctx.send({
+                  type: 'workspaceTodos',
+                  path: args.workspacePath,
+                  todos: addTodo(args.workspacePath, args.text),
+                });
+                return { content: [{ type: 'text', text: 'Task added.' }] };
+              },
+            ),
+            sdk.tool(
+              'usage_summary',
+              'Spending summary: today, month, all-time, per project.',
+              {},
+              async () => ({
+                content: [{ type: 'text', text: JSON.stringify(summarizeUsage(), null, 2) }],
+              }),
+            ),
+            sdk.tool(
+              'create_agent',
+              'Dispatch a new agent to a workspace with a self-contained task prompt.',
+              { workspacePath: z.string(), task: z.string() },
+              async (args) => {
+                launchChatAgent(args.workspacePath, undefined, args.task);
+                return {
+                  content: [{ type: 'text', text: `Agent dispatched to ${args.workspacePath}.` }],
+                };
+              },
+            ),
+          ],
+        }),
+      },
+      allowedTools: [
+        'mcp__campus__list_workspaces',
+        'mcp__campus__agents_status',
+        'mcp__campus__list_tasks',
+        'mcp__campus__add_task',
+        'mcp__campus__usage_summary',
+        'mcp__campus__create_agent',
+      ],
+    }),
+    onTurnComplete: (costUsd, durationMs) => {
+      recordTurnUsage(os.homedir(), costUsd, durationMs);
+    },
+    onExit: () => {
+      chatSessions.delete(id);
+      if (assistantAgentId === id) assistantAgentId = null;
+    },
+  });
+  chatSessions.set(id, session);
+  ctx.send({ type: 'chat-created', agentId: id, label: 'Assistant' });
+}
+
 // ── Session resume ───────────────────────────────────────────
 const RESUME_LIST_MAX = 20;
 const PREVIEW_READ_BYTES = 65536;
@@ -681,6 +803,12 @@ function handleWebviewMessage(msg: WebviewToHostMessage): void {
     void resolveAgentCwd(msg.folderPath).then((cwd) => {
       if (cwd) launchAgent(cwd);
     });
+  } else if (msg.type === 'openAssistant') {
+    if (assistantAgentId !== null && chatSessions.has(assistantAgentId)) {
+      ctx.send({ type: 'chat-focus', agentId: assistantAgentId });
+    } else {
+      openAssistant();
+    }
   } else if (msg.type === 'openChatAgent') {
     void resolveAgentCwd(msg.folderPath).then((cwd) => {
       if (cwd) launchChatAgent(cwd);

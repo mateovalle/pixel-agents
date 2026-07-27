@@ -119,6 +119,13 @@ export function startChatSession(opts: {
   onExit: () => void;
   /** Backing store for the workspace-scoped tasks tools. */
   taskHandlers?: TaskToolHandlers;
+  /** Builds custom MCP servers (runs with the loaded SDK — main is CJS). */
+  toolsFactory?: (
+    sdk: SdkModule,
+    z: typeof import('zod/v4', { with: { 'resolution-mode': 'import' } }).z,
+  ) => { mcpServers: NonNullable<Options['mcpServers']>; allowedTools: string[] };
+  /** Appended to the claude_code system prompt preset (assistant role, etc.). */
+  systemPromptAppend?: string;
   /** Called once per completed turn with the SDK's exact cost/duration. */
   onTurnComplete?: (costUsd: number, durationMs: number) => void;
 }): ChatSession {
@@ -355,6 +362,18 @@ export function startChatSession(opts: {
     try {
       const sdk = await loadSdk();
       const { z } = await import('zod/v4');
+      if (opts.systemPromptAppend) {
+        sdkOptions.systemPrompt = {
+          type: 'preset',
+          preset: 'claude_code',
+          append: opts.systemPromptAppend,
+        };
+      }
+      if (opts.toolsFactory) {
+        const built = opts.toolsFactory(sdk, z);
+        sdkOptions.mcpServers = built.mcpServers;
+        sdkOptions.allowedTools = built.allowedTools;
+      }
       const th = opts.taskHandlers;
       if (th) {
         sdkOptions.mcpServers = {

@@ -267,6 +267,8 @@ export type WebviewToHostMessage =
   | { type: 'addTodo'; path: string; text: string }
   | { type: 'toggleTodo'; path: string; id: string }
   | { type: 'deleteTodo'; path: string; id: string }
+  /** Open (or focus) the global Assistant chat session. */
+  | { type: 'openAssistant' }
   /** Spawn a chat agent in the workspace with the todo's text as first prompt. */
   | { type: 'assignTodo'; path: string; id: string }
   /** Resume a past session as a new chat agent. */

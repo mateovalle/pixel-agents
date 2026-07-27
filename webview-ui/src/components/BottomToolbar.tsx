@@ -53,6 +53,21 @@ export function BottomToolbar({
   return (
     <div style={panelStyle}>
       <button
+        onClick={() => vscode.postMessage({ type: 'openAssistant' })}
+        onMouseEnter={() => setHovered('assistant')}
+        onMouseLeave={() => setHovered(null)}
+        style={{
+          ...btnBase,
+          background:
+            hovered === 'assistant' ? 'var(--pixel-agent-hover-bg)' : 'var(--pixel-agent-bg)',
+          border: '2px solid var(--pixel-agent-border)',
+          color: 'var(--pixel-agent-text)',
+        }}
+        title="Open the campus assistant — it can read project status, tasks and spending, and dispatch agents"
+      >
+        Assistant
+      </button>
+      <button
         onClick={() => vscode.postMessage({ type: 'addWorkspace' })}
         onMouseEnter={() => setHovered('workspace')}
         onMouseLeave={() => setHovered(null)}
