@@ -334,6 +334,18 @@ function launchChatAgent(cwd: string, resumeSessionId?: string, initialPrompt?: 
     label,
     resume: !!resumeSessionId,
     send: ctx.send,
+    taskHandlers: {
+      list: () => getTodos(cwd),
+      add: (text) => {
+        ctx.send({ type: 'workspaceTodos', path: cwd, todos: addTodo(cwd, text) });
+      },
+      complete: (id) => {
+        const item = getTodos(cwd).find((t) => t.id === id && t.status === 'open');
+        if (!item) return false;
+        ctx.send({ type: 'workspaceTodos', path: cwd, todos: toggleTodo(cwd, id) });
+        return true;
+      },
+    },
     onTurnComplete: (costUsd, durationMs) => {
       recordTurnUsage(cwd, costUsd, durationMs);
     },
@@ -710,7 +722,15 @@ function handleWebviewMessage(msg: WebviewToHostMessage): void {
   } else if (msg.type === 'assignTodo') {
     const todo = getTodos(msg.path).find((t) => t.id === msg.id);
     if (todo) {
-      launchChatAgent(msg.path, undefined, todo.text);
+      launchChatAgent(
+        msg.path,
+        undefined,
+        `You are assigned this task (task id: ${todo.id}):\n\n${todo.text}\n\n` +
+          `The workspace has a shared task list available through your tasks tools ` +
+          `(mcp__tasks__list_tasks / add_task / complete_task). When you have completed ` +
+          `and verified this task, call complete_task with the task id above. If you ` +
+          `discover follow-up work worth tracking, record it with add_task.`,
+      );
     }
   } else if (msg.type === 'removeWorkspace') {
     ctx.send({ type: 'workspacesLoaded', workspaces: removeWorkspaceEntry(msg.path) });

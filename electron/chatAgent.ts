@@ -24,7 +24,15 @@ import type {
   ChatImageAttachment,
   ChatPermissionMode,
 } from '../shared/protocol.js';
+import type { TodoItem } from '../shared/protocol.js';
 import type { Send } from '../src/core/types.js';
+
+/** Host-side handlers backing the per-workspace `tasks` MCP tools. */
+export interface TaskToolHandlers {
+  list(): TodoItem[];
+  add(text: string): void;
+  complete(id: string): boolean;
+}
 
 const CHAT_HISTORY_MAX_EVENTS = 2000;
 const TOOL_SUMMARY_MAX_CHARS = 1500;
@@ -109,6 +117,8 @@ export function startChatSession(opts: {
   /** When set, continue this existing session instead of starting fresh. */
   resume?: boolean;
   onExit: () => void;
+  /** Backing store for the workspace-scoped tasks tools. */
+  taskHandlers?: TaskToolHandlers;
   /** Called once per completed turn with the SDK's exact cost/duration. */
   onTurnComplete?: (costUsd: number, durationMs: number) => void;
 }): ChatSession {
@@ -344,6 +354,54 @@ export function startChatSession(opts: {
   void (async () => {
     try {
       const sdk = await loadSdk();
+      const { z } = await import('zod/v4');
+      const th = opts.taskHandlers;
+      if (th) {
+        sdkOptions.mcpServers = {
+          tasks: sdk.createSdkMcpServer({
+            name: 'tasks',
+            tools: [
+              sdk.tool(
+                'list_tasks',
+                "List this workspace's shared task list (id, text, status).",
+                {},
+                async () => ({
+                  content: [{ type: 'text', text: JSON.stringify(th.list(), null, 2) }],
+                }),
+              ),
+              sdk.tool(
+                'add_task',
+                "Add a task to this workspace's shared task list (e.g. follow-up work you discovered).",
+                { text: z.string().describe('The task description') },
+                async (args) => {
+                  th.add(args.text);
+                  return { content: [{ type: 'text', text: 'Task added.' }] };
+                },
+              ),
+              sdk.tool(
+                'complete_task',
+                'Mark a task on the shared task list as done. Only call this once the task is completed and verified.',
+                { id: z.string().describe('The task id from list_tasks or your assignment') },
+                async (args) => ({
+                  content: [
+                    {
+                      type: 'text',
+                      text: th.complete(args.id)
+                        ? 'Task marked done.'
+                        : 'No open task with that id.',
+                    },
+                  ],
+                }),
+              ),
+            ],
+          }),
+        };
+        sdkOptions.allowedTools = [
+          'mcp__tasks__list_tasks',
+          'mcp__tasks__add_task',
+          'mcp__tasks__complete_task',
+        ];
+      }
       query = sdk.query({ prompt: input.iterable, options: sdkOptions });
       for await (const msg of query) {
         if (disposed) break;
