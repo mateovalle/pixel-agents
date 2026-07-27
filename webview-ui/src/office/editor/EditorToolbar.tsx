@@ -250,6 +250,13 @@ export function EditorToolbar({
       {/* Tool row — at the bottom */}
       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
         <button
+          style={activeTool === EditTool.SELECT ? activeBtnStyle : btnStyle}
+          onClick={() => onToolChange(EditTool.SELECT)}
+          title="Select furniture: click a piece to move, rotate or delete it (red X / Delete key)"
+        >
+          Select
+        </button>
+        <button
           style={isFloorActive ? activeBtnStyle : btnStyle}
           onClick={() => onToolChange(EditTool.TILE_PAINT)}
           title="Paint floor tiles"
