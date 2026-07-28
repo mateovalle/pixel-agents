@@ -82,7 +82,8 @@
     "pngjs": "^7.0.0"
   },
   "overrides": {
-    "node-abi": "^4.33.0"
+    "node-abi": "^4.33.0",
+    "node-gyp": "^12.4.0"
   },
   "lint-staged": {
     "src/**/*.ts": "eslint --fix",
