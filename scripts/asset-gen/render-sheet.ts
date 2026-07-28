@@ -21,6 +21,7 @@ import pngjs from 'pngjs';
 
 import type { GeneratedSprite } from './sprites.ts';
 import { SPRITES } from './sprites.ts';
+import { SPRITES2 } from './sprites2.ts';
 
 const { PNG } = pngjs;
 
@@ -38,12 +39,21 @@ interface Placed {
   y: number;
 }
 
-function layout(sprites: GeneratedSprite[]): { placed: Placed[]; width: number; height: number } {
+/**
+ * Lay out batches of sprites into rows. Each batch always starts on a new
+ * row (batch 2 renders below batch 1).
+ */
+function layout(batches: GeneratedSprite[][]): { placed: Placed[]; width: number; height: number } {
   const placed: Placed[] = [];
   let y = MARGIN;
   let sheetW = 0;
-  for (let i = 0; i < sprites.length; i += PER_ROW) {
-    const rowSprites = sprites.slice(i, i + PER_ROW);
+  const rows: GeneratedSprite[][] = [];
+  for (const batch of batches) {
+    for (let i = 0; i < batch.length; i += PER_ROW) {
+      rows.push(batch.slice(i, i + PER_ROW));
+    }
+  }
+  for (const rowSprites of rows) {
     const rowH = Math.max(...rowSprites.map((s) => s.heightPx * SCALE));
     let x = MARGIN;
     for (const s of rowSprites) {
@@ -66,7 +76,7 @@ function hexToRgb(hex: string): [number, number, number] {
 }
 
 function main(): void {
-  const { placed, width, height } = layout(SPRITES);
+  const { placed, width, height } = layout([SPRITES, SPRITES2]);
   const png = new PNG({ width, height });
 
   // dark checker background
@@ -109,8 +119,9 @@ function main(): void {
   console.log(`contact sheet: ${outPath} (${width}x${height})`);
   console.log('index legend (row-major, bottom-aligned rows):');
   placed.forEach(({ sprite, x, y }, i) => {
+    const batch = i < SPRITES.length ? 1 : 2;
     console.log(
-      `  ${String(i + 1).padStart(2)}. ${sprite.id.padEnd(15)} ${String(sprite.widthPx)}x${String(sprite.heightPx)}px  at (${String(x)}, ${String(y)})`,
+      `  ${String(i + 1).padStart(2)}. [b${String(batch)}] ${sprite.id.padEnd(15)} ${String(sprite.widthPx)}x${String(sprite.heightPx)}px  at (${String(x)}, ${String(y)})`,
     );
   });
 }
