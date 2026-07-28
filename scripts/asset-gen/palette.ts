@@ -61,15 +61,29 @@ export const ORANGE = '#FF8844'; // character shirt orange (fish!)
 export const CLAY_DARK = '#8B4422';
 export const CLAY = '#B85C3A';
 
+// ── Batch 3 additions (documented gaps) ─────────────────────────
+// PURPLE/PURPLE_DARK: the house palette had no purple at all — batch 2's
+// bookshelf comment called this out. Used for book/poster/snack accents.
+export const PURPLE_DARK = '#5C3A77'; // purple outline/shadow
+export const PURPLE = '#8855BB'; // book spines, poster + snack accents
+// GREEN_LIGHT: lit-green gap between GREEN (#44AA66) and nothing brighter —
+// needed for the top-left-lit strip on large green surfaces (pingpong table).
+export const GREEN_LIGHT = '#66CC88';
+// LAMP_WARM: warm lamp yellow between GOLD (#FFD700) and ORANGE (#FF8844) —
+// GOLD_LIGHT (#FFEE88) is a pale spill tone; this is the glowing bulb/lit
+// vending front tone.
+export const LAMP_WARM = '#FFCC55';
+
 /** Palette grouped by material family, for docs/tooling. */
 export const PALETTE_GROUPS: Record<string, Record<string, string>> = {
   wood: { WOOD_SHADOW, WOOD_DARK, WOOD, WOOD_LIGHT, WOOD_SURFACE },
   metal: { INK, IRON_DARK, IRON, STEEL_DARK, STEEL, STEEL_LIGHT, SILVER, SILVER_LIGHT },
-  green: { LEAF_DARK, LEAF, GREEN, LED_GREEN },
+  green: { LEAF_DARK, LEAF, GREEN, LED_GREEN, GREEN_LIGHT },
   blue: { SCREEN_SHADOW, SCREEN_BLUE, BLUE, SKY, ICE },
   fabric: { PAPER, SLATE },
-  accent: { RED, AMBER, GOLD_DARK, GOLD, GOLD_LIGHT, ORANGE },
+  accent: { RED, AMBER, GOLD_DARK, GOLD, GOLD_LIGHT, ORANGE, LAMP_WARM },
   clay: { CLAY_DARK, CLAY },
+  purple: { PURPLE_DARK, PURPLE },
 };
 
 /** Flat list of every allowed hex color. */

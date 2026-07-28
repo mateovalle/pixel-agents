@@ -19,9 +19,11 @@ import { fileURLToPath } from 'node:url';
 
 import pngjs from 'pngjs';
 
+import { FLOOR_SHEET } from './floors.ts';
 import type { GeneratedSprite } from './sprites.ts';
 import { SPRITES } from './sprites.ts';
 import { SPRITES2 } from './sprites2.ts';
+import { SPRITES3 } from './sprites3.ts';
 
 const { PNG } = pngjs;
 
@@ -35,30 +37,36 @@ const CHECKER_B: [number, number, number] = [0x2c, 0x2c, 0x36];
 
 interface Placed {
   sprite: GeneratedSprite;
+  batch: string;
   x: number;
   y: number;
 }
 
+interface Batch {
+  name: string;
+  sprites: GeneratedSprite[];
+}
+
 /**
- * Lay out batches of sprites into rows. Each batch always starts on a new
- * row (batch 2 renders below batch 1).
+ * Lay out named batches of sprites into rows. Each batch always starts on a
+ * new row (batch 2 renders below batch 1, etc.).
  */
-function layout(batches: GeneratedSprite[][]): { placed: Placed[]; width: number; height: number } {
+function layout(batches: Batch[]): { placed: Placed[]; width: number; height: number } {
   const placed: Placed[] = [];
   let y = MARGIN;
   let sheetW = 0;
-  const rows: GeneratedSprite[][] = [];
+  const rows: { name: string; sprites: GeneratedSprite[] }[] = [];
   for (const batch of batches) {
-    for (let i = 0; i < batch.length; i += PER_ROW) {
-      rows.push(batch.slice(i, i + PER_ROW));
+    for (let i = 0; i < batch.sprites.length; i += PER_ROW) {
+      rows.push({ name: batch.name, sprites: batch.sprites.slice(i, i + PER_ROW) });
     }
   }
-  for (const rowSprites of rows) {
+  for (const { name, sprites: rowSprites } of rows) {
     const rowH = Math.max(...rowSprites.map((s) => s.heightPx * SCALE));
     let x = MARGIN;
     for (const s of rowSprites) {
       // bottom-align within the row so "floor" lines match
-      placed.push({ sprite: s, x, y: y + rowH - s.heightPx * SCALE });
+      placed.push({ sprite: s, batch: name, x, y: y + rowH - s.heightPx * SCALE });
       x += s.widthPx * SCALE + GAP;
     }
     sheetW = Math.max(sheetW, x - GAP + MARGIN);
@@ -76,7 +84,13 @@ function hexToRgb(hex: string): [number, number, number] {
 }
 
 function main(): void {
-  const { placed, width, height } = layout([SPRITES, SPRITES2]);
+  const { placed, width, height } = layout([
+    { name: 'b1', sprites: SPRITES },
+    { name: 'b2', sprites: SPRITES2 },
+    { name: 'b3', sprites: SPRITES3 },
+    // each floor pattern rendered as a 3x3 tiled block for seam review
+    { name: 'floors', sprites: FLOOR_SHEET },
+  ]);
   const png = new PNG({ width, height });
 
   // dark checker background
@@ -118,10 +132,9 @@ function main(): void {
 
   console.log(`contact sheet: ${outPath} (${width}x${height})`);
   console.log('index legend (row-major, bottom-aligned rows):');
-  placed.forEach(({ sprite, x, y }, i) => {
-    const batch = i < SPRITES.length ? 1 : 2;
+  placed.forEach(({ sprite, batch, x, y }, i) => {
     console.log(
-      `  ${String(i + 1).padStart(2)}. [b${String(batch)}] ${sprite.id.padEnd(15)} ${String(sprite.widthPx)}x${String(sprite.heightPx)}px  at (${String(x)}, ${String(y)})`,
+      `  ${String(i + 1).padStart(2)}. [${batch}] ${sprite.id.padEnd(20)} ${String(sprite.widthPx)}x${String(sprite.heightPx)}px  at (${String(x)}, ${String(y)})`,
     );
   });
 }
