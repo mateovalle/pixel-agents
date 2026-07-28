@@ -23,8 +23,10 @@ dist-ssr
 *.sln
 *.sw?
 
-# Privately licensed files
+# Generated/bundled assets: ignore by default, whitelist our own (MIT) art
 */assets/*
 !*/assets/characters/
 !*/assets/default-layout.json
 !*/assets/walls.png
+!*/assets/floors.png
+!*/assets/furniture/
