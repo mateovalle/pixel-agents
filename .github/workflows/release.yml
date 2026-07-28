@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            args: --mac dmg
+            artifacts: release/*.dmg
+          - os: ubuntu-latest
+            args: --linux AppImage
+            artifacts: release/*.AppImage
+          - os: windows-latest
+            args: --win nsis
+            artifacts: release/*.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            webview-ui/package-lock.json
+      - name: Install root dependencies
+        run: npm ci
+      - name: Install webview dependencies
+        run: npm ci
+        working-directory: webview-ui
+      - name: Build app
+        run: npm run build:electron && npm run build:webview
+      - name: Package
+        run: npx electron-builder ${{ matrix.args }} --publish never
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artifacts }}
+          draft: false
+          generate_release_notes: true
