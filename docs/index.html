@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pixel Agents — Your Claude Code agents, working in a pixel office</title>
+<meta name="description" content="Pixel Agents is an open-source mission-control desktop app for Claude Code. Every project is an office on a campus map; every agent is an animated pixel character.">
+<meta property="og:title" content="Pixel Agents">
+<meta property="og:description" content="Your Claude Code agents, working in a pixel office. Open-source mission control: campus map, rich chat, task orchestration, spend tracking, achievements.">
+<link rel="icon" type="image/png" href="assets/sprites/rubber_duck.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --void: #0a0a14;        /* deepest ink — borders & hard shadows */
+    --night: #14141c;       /* page background */
+    --panel: #1e1e2e;       /* card / panel background */
+    --line: #3a3a4e;        /* visible border on dark */
+    --green: #4ade80;       /* terminal green — working state */
+    --amber: #f5a524;       /* permission amber */
+    --paper: #e8e8f0;       /* main text */
+    --muted: #9a9ab0;       /* secondary text */
+    --display: 'Press Start 2P', monospace;
+    --body: 'IBM Plex Mono', ui-monospace, monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--night);
+    color: var(--paper);
+    font-family: var(--body);
+    font-size: 16px;
+    line-height: 1.65;
+    overflow-x: hidden;
+  }
+
+  /* subtle CRT scanlines over everything */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(10, 10, 20, 0.14) 0px,
+      rgba(10, 10, 20, 0.14) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+    z-index: 999;
+  }
+
+  .px { image-rendering: pixelated; image-rendering: crisp-edges; }
+
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
+
+  section { padding: 96px 0 0; }
+
+  a { color: var(--green); }
+  a:focus-visible, button:focus-visible {
+    outline: 2px solid var(--green);
+    outline-offset: 3px;
+  }
+
+  /* ---------- type ---------- */
+  .eyebrow {
+    font-family: var(--display);
+    font-size: 10px;
+    color: var(--amber);
+    letter-spacing: 2px;
+    margin-bottom: 16px;
+  }
+  .eyebrow::before { content: '■ '; color: var(--green); }
+
+  h2 {
+    font-family: var(--display);
+    font-size: clamp(16px, 3vw, 24px);
+    line-height: 1.6;
+    margin-bottom: 20px;
+    text-shadow: 3px 3px 0 var(--void);
+  }
+
+  .lead { color: var(--muted); max-width: 640px; }
+
+  /* ---------- pixel buttons ---------- */
+  .btn {
+    display: inline-block;
+    font-family: var(--display);
+    font-size: 12px;
+    line-height: 1;
+    text-decoration: none;
+    padding: 18px 24px 16px;
+    border: 2px solid var(--void);
+    box-shadow: 4px 4px 0 var(--void);
+    transition: transform 60ms steps(2), box-shadow 60ms steps(2);
+  }
+  .btn:hover, .btn:focus-visible { transform: translate(2px, 2px); box-shadow: 2px 2px 0 var(--void); }
+  .btn:active { transform: translate(4px, 4px); box-shadow: 0 0 0 var(--void); }
+  .btn-dl { background: var(--green); color: var(--void); }
+  .btn-gh { background: var(--panel); color: var(--paper); border-color: var(--line); }
+
+  /* ================= HERO ================= */
+  .hero { padding: 72px 0 0; text-align: center; }
+
+  .press-start {
+    font-family: var(--display);
+    font-size: 11px;
+    color: var(--green);
+    letter-spacing: 3px;
+    animation: blink 1.2s steps(2) infinite;
+    margin-bottom: 28px;
+  }
+  @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.15; } }
+
+  h1 {
+    font-family: var(--display);
+    font-size: clamp(20px, 5vw, 52px);
+    line-height: 1.35;
+    text-shadow: 4px 4px 0 var(--void), 8px 8px 0 rgba(74, 222, 128, 0.18);
+  }
+  h1 .accent { color: var(--green); }
+
+  .tagline {
+    font-size: clamp(16px, 2.4vw, 19px);
+    font-weight: 600;
+    margin: 26px auto 10px;
+  }
+  .subline { color: var(--muted); max-width: 620px; margin: 0 auto; }
+
+  .cta-row {
+    display: flex;
+    gap: 24px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin: 40px 0 12px;
+  }
+  .cta-note { font-size: 13px; color: var(--muted); }
+
+  /* ---------- the office scene ---------- */
+  .scene-frame {
+    margin: 56px auto 0;
+    max-width: 968px;
+    border: 2px solid var(--line);
+    box-shadow: 4px 4px 0 var(--void);
+    background: var(--panel);
+  }
+  .scene-viewport {
+    position: relative;
+    overflow: hidden;
+    height: 384px; /* 192 native * scale 2 */
+    background:
+      repeating-conic-gradient(#24242c 0% 25%, #2c2c36 0% 50%) 0 64px / 32px 32px;
+  }
+  .scene {
+    position: absolute;
+    left: 50%;
+    top: 0;
+    width: 480px;
+    height: 192px;
+    transform: translateX(-50%) scale(2);
+    transform-origin: top center;
+  }
+  .scene * { position: absolute; image-rendering: pixelated; }
+  .scene img { display: block; }
+
+  #walls i {
+    top: 0;
+    width: 16px;
+    height: 32px;
+    background: url('assets/walls.png') no-repeat;
+    image-rendering: pixelated;
+  }
+
+  .char {
+    width: 16px;
+    height: 32px;
+    background-repeat: no-repeat;
+    image-rendering: pixelated;
+  }
+  .p0 { background-image: url('assets/char_0.png'); }
+  .p1 { background-image: url('assets/char_1.png'); }
+  .p2 { background-image: url('assets/char_2.png'); }
+  .p3 { background-image: url('assets/char_3.png'); }
+  .p4 { background-image: url('assets/char_4.png'); }
+  .p5 { background-image: url('assets/char_5.png'); }
+
+  .typing-up { background-position: -48px -32px; animation: typeUp 0.5s steps(2) infinite; }
+  @keyframes typeUp { from { background-position: -48px -32px; } to { background-position: -80px -32px; } }
+
+  .idle-down { background-position: -16px 0; }
+
+  .walker {
+    left: -24px;
+    background-position: 0 -64px;
+    animation: walkCycle 0.45s steps(3) infinite, cross 18s linear infinite;
+  }
+  @keyframes walkCycle { from { background-position: 0 -64px; } to { background-position: -48px -64px; } }
+  @keyframes cross { from { transform: translateX(0); } to { transform: translateX(540px); } }
+
+  /* speech bubbles, drawn in scene-native pixels */
+  .bubble {
+    width: 14px;
+    height: 9px;
+    background: #f4f4f8;
+    border: 1px solid var(--void);
+  }
+  .bubble::after {
+    content: '';
+    position: absolute;
+    left: 4px;
+    bottom: -3px;
+    width: 2px;
+    height: 2px;
+    background: #f4f4f8;
+    box-shadow: 0 2px 0 var(--void);
+  }
+  .bubble .dots {
+    left: 2px; top: 3px;
+    width: 2px; height: 2px;
+    background: var(--amber);
+    box-shadow: 3px 0 0 var(--amber), 6px 0 0 var(--amber);
+    animation: blink 1s steps(2) infinite;
+  }
+  .bubble .check {
+    left: 3px; top: 1px;
+    width: 1px; height: 1px;
+    background: transparent;
+    box-shadow:
+      0px 3px 0 var(--green), 1px 4px 0 var(--green), 2px 5px 0 var(--green),
+      3px 4px 0 var(--green), 4px 3px 0 var(--green), 5px 2px 0 var(--green),
+      6px 1px 0 var(--green);
+  }
+
+  .scene-caption {
+    font-size: 12px;
+    color: var(--muted);
+    padding: 10px 14px;
+    border-top: 2px solid var(--line);
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .scene-caption .ok { color: var(--green); }
+
+  /* ================= FEATURES ================= */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+    margin-top: 40px;
+  }
+  .card {
+    background: var(--panel);
+    border: 2px solid var(--line);
+    box-shadow: 4px 4px 0 var(--void);
+    padding: 24px;
+    transition: transform 60ms steps(2), box-shadow 60ms steps(2), border-color 60ms steps(2);
+  }
+  .card:hover { transform: translate(-2px, -2px); box-shadow: 6px 6px 0 var(--void); border-color: var(--green); }
+  .card .icon {
+    height: 84px;
+    display: flex;
+    align-items: flex-end;
+    margin-bottom: 18px;
+  }
+  .card h3 {
+    font-family: var(--display);
+    font-size: 11px;
+    line-height: 1.7;
+    color: var(--green);
+    margin-bottom: 12px;
+  }
+  .card p { font-size: 14px; color: var(--muted); }
+
+  /* ================= ART SHOWCASE ================= */
+  .strip-frame {
+    margin-top: 40px;
+    border: 2px solid var(--line);
+    box-shadow: 4px 4px 0 var(--void);
+    background: #24242c;
+  }
+  .strip {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    padding: 20px;
+    overflow-x: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--line) var(--panel);
+  }
+  .cell {
+    position: relative;
+    flex: none;
+    border: 2px solid var(--void);
+    background-image: url('assets/contact-sheet.png');
+    background-size: 752px 1336px; /* sheet at 0.5x — sprites land at 3x native */
+    image-rendering: pixelated;
+  }
+  .cell::after {
+    content: attr(data-name);
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    background: var(--void);
+    color: var(--green);
+    font-size: 10px;
+    line-height: 1;
+    padding: 4px;
+    opacity: 0;
+    transition: opacity 80ms steps(2);
+    pointer-events: none;
+  }
+  .cell:hover::after { opacity: 1; }
+  .strip-caption {
+    font-size: 12px;
+    color: var(--muted);
+    padding: 10px 14px;
+    border-top: 2px solid var(--line);
+  }
+  .art-story { margin-top: 28px; max-width: 720px; color: var(--muted); }
+  .art-story strong { color: var(--paper); }
+
+  /* ================= DEMO ================= */
+  .crt {
+    margin-top: 40px;
+    background: var(--panel);
+    border: 2px solid var(--line);
+    box-shadow: 4px 4px 0 var(--void);
+    padding: 20px;
+  }
+  .crt-screen {
+    aspect-ratio: 16 / 10;
+    border: 2px solid var(--void);
+    background:
+      repeating-linear-gradient(to bottom, rgba(74, 222, 128, 0.05) 0 2px, transparent 2px 4px),
+      radial-gradient(ellipse at center, #101020 0%, var(--void) 90%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+  }
+  .crt-title { font-family: var(--display); font-size: clamp(11px, 2vw, 16px); color: var(--green); }
+  .crt-sub { font-family: var(--display); font-size: 10px; color: var(--muted); animation: blink 1.2s steps(2) infinite; }
+  .crt-bar {
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    font-size: 12px;
+    color: var(--muted);
+    padding-top: 12px;
+  }
+
+  /* ================= MAKER ================= */
+  .maker {
+    margin-top: 40px;
+    display: flex;
+    gap: 36px;
+    align-items: flex-start;
+    background: var(--panel);
+    border: 2px solid var(--line);
+    box-shadow: 4px 4px 0 var(--void);
+    padding: 32px;
+    flex-wrap: wrap;
+  }
+  .avatar-slot {
+    flex: none;
+    width: 112px;
+    height: 160px;
+    border: 2px solid var(--void);
+    background: repeating-conic-gradient(#24242c 0% 25%, #2c2c36 0% 50%) 0 0 / 24px 24px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding-bottom: 12px;
+  }
+  .avatar {
+    width: 16px;
+    height: 32px;
+    background: url('assets/char_3.png') -16px 0 no-repeat;
+    image-rendering: pixelated;
+    transform: scale(4);
+    transform-origin: bottom center;
+  }
+  .maker-body { flex: 1; min-width: 260px; }
+  .maker-body h3 { font-family: var(--display); font-size: 13px; line-height: 1.7; margin-bottom: 16px; }
+  .maker-body p { color: var(--muted); font-size: 15px; margin-bottom: 20px; }
+  .maker-links { display: flex; gap: 14px; flex-wrap: wrap; }
+  .chip {
+    font-family: var(--display);
+    font-size: 10px;
+    color: var(--paper);
+    text-decoration: none;
+    background: var(--night);
+    border: 2px solid var(--line);
+    box-shadow: 3px 3px 0 var(--void);
+    padding: 12px 14px 10px;
+  }
+  .chip:hover, .chip:focus-visible { border-color: var(--green); color: var(--green); transform: translate(1px, 1px); box-shadow: 2px 2px 0 var(--void); }
+
+  /* ================= FOOTER ================= */
+  footer { margin-top: 110px; border-top: 2px solid var(--line); position: relative; }
+  .footer-walkway {
+    position: relative;
+    height: 110px;
+    overflow: hidden;
+    background: repeating-conic-gradient(#191924 0% 25%, #1e1e2a 0% 50%) 0 0 / 48px 48px;
+    border-bottom: 2px solid var(--line);
+  }
+  .footer-walker {
+    position: absolute;
+    bottom: 8px;
+    left: -80px;
+    width: 16px;
+    height: 32px;
+    background: url('assets/char_0.png') 0 -64px no-repeat;
+    image-rendering: pixelated;
+    transform-origin: bottom left;
+    animation: walkCycle 0.45s steps(3) infinite, footCross 22s linear infinite;
+  }
+  @keyframes footCross {
+    from { transform: scale(3) translateX(0); }
+    to { transform: scale(3) translateX(calc(34vw + 60px)); }
+  }
+  .footer-text {
+    padding: 32px 0 44px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .footer-text p { margin-bottom: 8px; }
+
+  /* ================= MOTION & RESPONSIVE ================= */
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .press-start, .crt-sub, .bubble .dots { animation: none; }
+    .walker, .footer-walker { animation: none; }
+    .footer-walker { transform: scale(3); left: 40px; }
+    .typing-up { animation: none; }
+  }
+
+  @media (max-width: 900px) {
+    .grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 560px) {
+    .grid { grid-template-columns: 1fr; }
+    section { padding-top: 72px; }
+    .scene-viewport { height: 320px; }
+    .scene { transform: translateX(-50%) scale(2) translateY(-16px); }
+    .maker { padding: 24px; }
+  }
+</style>
+</head>
+<body>
+
+  <!-- ================= HERO ================= -->
+  <header class="hero wrap">
+    <p class="press-start">▶ PRESS START</p>
+    <h1>PIXEL <span class="accent">AGENTS</span></h1>
+    <p class="tagline">Your Claude Code agents, working in a pixel office.</p>
+    <p class="subline">An open-source mission-control desktop app. Every project is an office on one campus map; every agent is a character you can watch think, code, and ask for permission.</p>
+
+    <div class="cta-row">
+      <a class="btn btn-dl" href="https://github.com/mateovalle/pixel-agents/releases/latest">⬇ DOWNLOAD</a>
+      <a class="btn btn-gh" href="https://github.com/mateovalle/pixel-agents">★ GITHUB</a>
+    </div>
+    <p class="cta-note">macOS · Linux · Windows — free &amp; MIT licensed</p>
+
+    <!-- Live office scene, collaged from the app's real sprites -->
+    <div class="scene-frame" role="img" aria-label="A pixel-art office scene: animated characters typing at desks, one walking across the floor, speech bubbles above their heads.">
+      <div class="scene-viewport">
+        <div class="scene" aria-hidden="true">
+          <!-- wall band (stamped by script below from walls.png auto-tiles) -->
+          <div id="walls"></div>
+
+          <!-- wall decorations -->
+          <img class="px" src="assets/sprites/window.png"       alt="" style="left:40px;  top:0;"  width="32" height="32">
+          <img class="px" src="assets/sprites/poster_code.png"  alt="" style="left:136px; top:0;"  width="16" height="32">
+          <img class="px" src="assets/sprites/wall_clock.png"   alt="" style="left:206px; top:8px;" width="16" height="16">
+          <img class="px" src="assets/sprites/whiteboard.png"   alt="" style="left:300px; top:0;"  width="32" height="32">
+          <img class="px" src="assets/sprites/window.png"       alt="" style="left:396px; top:0;"  width="32" height="32">
+
+          <!-- furniture against the wall -->
+          <img class="px" src="assets/sprites/vending_machine.png" alt="" style="left:6px;   top:8px;" width="16" height="48">
+          <img class="px" src="assets/sprites/plant_monstera.png"  alt="" style="left:170px; top:40px;" width="16" height="32">
+          <img class="px" src="assets/sprites/bookshelf_tall.png"  alt="" style="left:258px; top:8px;" width="16" height="48">
+          <img class="px" src="assets/sprites/arcade_machine.png"  alt="" style="left:430px; top:8px;" width="16" height="48">
+          <img class="px" src="assets/sprites/server_rack.png"     alt="" style="left:456px; top:8px;" width="16" height="48">
+
+          <!-- desk cluster: left -->
+          <img class="px" src="assets/sprites/chair_office.png" alt="" style="left:56px; top:72px;" width="16" height="32">
+          <img class="px" src="assets/sprites/desk_l.png"       alt="" style="left:40px; top:56px;" width="48" height="32">
+          <img class="px" src="assets/sprites/monitor_dual.png" alt="" style="left:44px; top:44px;" width="32" height="16">
+          <img class="px" src="assets/sprites/rubber_duck.png"  alt="" style="left:76px; top:48px;" width="16" height="16">
+          <div class="char p1 typing-up" style="left:56px; top:78px;"></div>
+
+          <!-- desk cluster: middle (double desk, two agents) -->
+          <img class="px" src="assets/sprites/chair_office.png" alt="" style="left:204px; top:64px;" width="16" height="32">
+          <img class="px" src="assets/sprites/chair_office.png" alt="" style="left:228px; top:64px;" width="16" height="32">
+          <img class="px" src="assets/sprites/desk_double.png"  alt="" style="left:200px; top:48px;" width="48" height="32">
+          <img class="px" src="assets/sprites/monitor_dual.png" alt="" style="left:208px; top:36px;" width="32" height="16">
+          <div class="char p2 typing-up" style="left:204px; top:70px;"></div>
+          <div class="char p4 typing-up" style="left:228px; top:70px;"></div>
+
+          <!-- desk cluster: right -->
+          <img class="px" src="assets/sprites/chair_gamer.png"  alt="" style="left:316px; top:80px;" width="16" height="32">
+          <img class="px" src="assets/sprites/desk_double.png"  alt="" style="left:300px; top:64px;" width="48" height="32">
+          <img class="px" src="assets/sprites/monitor_dual.png" alt="" style="left:308px; top:52px;" width="32" height="16">
+          <img class="px" src="assets/sprites/coffee_machine.png" alt="" style="left:336px; top:56px;" width="16" height="16">
+          <div class="char p5 typing-up" style="left:316px; top:86px;"></div>
+          <!-- done bubble: this agent just finished its turn -->
+          <div class="bubble" style="left:317px; top:80px;"><i class="check"></i></div>
+
+          <!-- lounge corner -->
+          <img class="px" src="assets/sprites/couch.png"        alt="" style="left:388px; top:110px;" width="32" height="32">
+          <img class="px" src="assets/sprites/cat_sleeping.png" alt="" style="left:428px; top:126px;" width="16" height="16">
+
+          <!-- idle character waiting for permission -->
+          <div class="char p3 idle-down" style="left:140px; top:104px;"></div>
+          <div class="bubble" style="left:139px; top:98px;"><i class="dots"></i></div>
+
+          <!-- walker crossing the office -->
+          <div class="char p0 walker" style="top:140px;"></div>
+        </div>
+      </div>
+      <div class="scene-caption">
+        <span><span class="ok">●</span> 5 agents working · 1 waiting for you</span>
+        <span>today: $4.21 across 3 offices</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ================= FEATURES ================= -->
+  <section class="wrap" id="features">
+    <p class="eyebrow">FEATURES</p>
+    <h2>WHAT'S IN THE BOX</h2>
+    <p class="lead">Real Claude Code sessions — same login, same config, same transcripts. Start in the app, resume in your terminal, or vice versa. Nothing is locked in.</p>
+
+    <div class="grid">
+      <div class="card">
+        <div class="icon"><img class="px" src="assets/sprites/window.png" alt="" width="96" height="96"></div>
+        <h3>CAMPUS VIEW</h3>
+        <p>Register project folders as offices on one pannable pixel map. See at a glance who's working, who's waiting for you, and what each project costs today.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><img class="px" src="assets/sprites/monitor_dual.png" alt="" width="96" height="48"></div>
+        <h3>RICH CHAT AGENTS</h3>
+        <p>Powered by the Claude Agent SDK: streamed markdown, tool cards with real diffs, Allow/Deny permission buttons, image paste, session resume.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><img class="px" src="assets/sprites/whiteboard.png" alt="" width="96" height="96"></div>
+        <h3>TASK ORCHESTRATION</h3>
+        <p>Shared task lists between you and your agents. Assign a task with one click — an agent spawns, works, logs discovered work, and checks it off when it truly finishes.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><img class="px" src="assets/sprites/rubber_duck.png" alt="" width="64" height="64"></div>
+        <h3>THE ASSISTANT</h3>
+        <p>The rubber duck that talks back: a campus-wide orchestrator that reads project status, backlogs and spending, and dispatches agents to any office in plain language.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><img class="px" src="assets/sprites/tv_dashboard.png" alt="" width="96" height="48"></div>
+        <h3>SPEND TRACKING</h3>
+        <p>Exact costs from the SDK — not estimates. Per turn, per day, per project, live on each office's label.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><img class="px" src="assets/sprites/trophy_gold.png" alt="" width="64" height="64"></div>
+        <h3>ACHIEVEMENTS</h3>
+        <p>Milestones for shipped tasks, parallel agents and streaks. Never for spend.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= ART SHOWCASE ================= -->
+  <section class="wrap" id="art">
+    <p class="eyebrow">SELF-PORTRAIT</p>
+    <h2>THE ART WAS DRAWN BY AGENTS</h2>
+    <p class="art-story"><strong>Every sprite on this page was drawn by Claude agents</strong> — authored as pixel arrays in TypeScript, rendered to a contact sheet, screenshotted, and self-critiqued in a loop until it looked right. The office they drew is the office they work in.</p>
+
+    <div class="strip-frame">
+      <div class="strip" tabindex="0" aria-label="Scrollable strip of agent-drawn sprites from the asset pipeline's contact sheet">
+        <div class="cell" data-name="desk_l"          style="width:144px; height:96px;  background-position: -8px -56px;"></div>
+        <div class="cell" data-name="chair_gamer"     style="width:48px;  height:96px;  background-position: -156px -56px;"></div>
+        <div class="cell" data-name="server_rack"     style="width:48px;  height:144px; background-position: -308px -8px;"></div>
+        <div class="cell" data-name="fish_tank"       style="width:96px;  height:96px;  background-position: -60px -160px;"></div>
+        <div class="cell" data-name="rug_large"       style="width:144px; height:96px;  background-position: -160px -160px;"></div>
+        <div class="cell" data-name="couch"           style="width:96px;  height:96px;  background-position: -360px -264px;"></div>
+        <div class="cell" data-name="bookshelf_tall"  style="width:48px;  height:144px; background-position: -108px -368px;"></div>
+        <div class="cell" data-name="arcade_machine"  style="width:48px;  height:144px; background-position: -264px -520px;"></div>
+        <div class="cell" data-name="window"          style="width:96px;  height:96px;  background-position: -8px -672px;"></div>
+        <div class="cell" data-name="vending_machine" style="width:48px;  height:144px; background-position: -8px -776px;"></div>
+        <div class="cell" data-name="pingpong_table"  style="width:144px; height:96px;  background-position: -212px -824px;"></div>
+        <div class="cell" data-name="trophy_gold"     style="width:48px;  height:48px;  background-position: -408px -208px;"></div>
+        <div class="cell" data-name="cat_sleeping"    style="width:48px;  height:48px;  background-position: -60px -976px;"></div>
+        <div class="cell" data-name="rubber_duck"     style="width:48px;  height:48px;  background-position: -112px -976px;"></div>
+        <div class="cell" data-name="floor_herringbone" style="width:144px; height:144px; background-position: -600px -1032px;"></div>
+      </div>
+      <div class="strip-caption">contact-sheet.png — actual output of the agents' sprite pipeline. Not a mockup.</div>
+    </div>
+  </section>
+
+  <!-- ================= DEMO ================= -->
+  <section class="wrap" id="demo">
+    <p class="eyebrow">GAMEPLAY</p>
+    <h2>SEE IT RUN</h2>
+
+    <!-- TODO(owner): replace the .crt-screen contents with your demo, e.g.
+         <img src="assets/demo.gif" alt="Pixel Agents demo: campus, click an office, assign a task, an agent spawns and works" style="width:100%; display:block;">
+    -->
+    <div class="crt">
+      <div class="crt-screen">
+        <p class="crt-title">DEMO.GIF — COMING SOON</p>
+        <p class="crt-sub">▮ INSERT GIF TO CONTINUE</p>
+      </div>
+      <div class="crt-bar">
+        <span>campus → office → assign task → agent works → task checks itself off</span>
+        <span>REC ●</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= MAKER ================= -->
+  <section class="wrap" id="maker">
+    <p class="eyebrow">PLAYER 1</p>
+    <h2>ABOUT THE MAKER</h2>
+
+    <div class="maker">
+      <div class="avatar-slot" aria-hidden="true"><div class="avatar"></div></div>
+      <div class="maker-body">
+        <h3>MATEO VALLE</h3>
+        <!-- TODO(owner): replace this placeholder bio with your own short intro (2–3 sentences). -->
+        <p>Builder of Pixel Agents. [Short bio goes here — who you are, what you work on, and why you wanted your agents to have an office. Edit this paragraph in docs/index.html.]</p>
+        <div class="maker-links">
+          <a class="chip" href="https://github.com/mateovalle">GITHUB</a>
+          <!-- TODO(owner): replace # with your X/Twitter profile URL -->
+          <a class="chip" href="#">X / TWITTER</a>
+          <!-- TODO(owner): replace # with mailto:your@email -->
+          <a class="chip" href="#">EMAIL</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= FOOTER ================= -->
+  <footer>
+    <div class="footer-walkway" aria-hidden="true">
+      <div class="footer-walker"></div>
+    </div>
+    <div class="footer-text wrap">
+      <p><a href="https://github.com/mateovalle/pixel-agents/blob/main/LICENSE">MIT License</a> · started as a fork of <a href="https://github.com/pablodelucca/pixel-agents">pablodelucca/pixel-agents</a></p>
+      <p>Built with <a href="https://claude.com/claude-code">Claude Code</a> — by Claude agents, mostly. Even this page.</p>
+    </div>
+  </footer>
+
+<script>
+  // Stamp the hero wall band from walls.png auto-tiles (16x32 pieces in a 4x4
+  // bitmask grid: N=1 E=2 S=4 W=8). A horizontal run is E-cap, E|W middles, W-cap.
+  (function () {
+    var row = document.getElementById('walls');
+    var TILES = 30;
+    for (var i = 0; i < TILES; i++) {
+      var mask = i === 0 ? 2 : i === TILES - 1 ? 8 : 10;
+      var t = document.createElement('i');
+      t.style.left = i * 16 + 'px';
+      t.style.backgroundPosition = -(mask % 4) * 16 + 'px ' + -Math.floor(mask / 4) * 32 + 'px';
+      row.appendChild(t);
+    }
+  })();
+</script>
+</body>
+</html>
