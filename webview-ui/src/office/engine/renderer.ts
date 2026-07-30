@@ -342,22 +342,39 @@ export function renderGhostPreview(
   sprite: SpriteData,
   col: number,
   row: number,
+  footprintW: number,
+  footprintH: number,
   valid: boolean,
   offsetX: number,
   offsetY: number,
   zoom: number,
 ): void {
   const cached = getCachedSprite(sprite, zoom);
-  const x = offsetX + col * TILE_SIZE * zoom;
-  const y = offsetY + row * TILE_SIZE * zoom;
+  const s = TILE_SIZE * zoom;
+  const x = offsetX + col * s;
+  // Bottom-anchor: sprite bottom aligns with the footprint's bottom edge
+  const spriteY = offsetY + (row + footprintH) * s - cached.height;
   ctx.save();
   ctx.globalAlpha = GHOST_PREVIEW_SPRITE_ALPHA;
-  ctx.drawImage(cached, x, y);
-  // Tint overlay
+  ctx.drawImage(cached, x, spriteY);
+  // Validity tint paints the footprint tiles (the base the item stands on)
   ctx.globalAlpha = GHOST_PREVIEW_TINT_ALPHA;
   ctx.fillStyle = valid ? GHOST_VALID_TINT : GHOST_INVALID_TINT;
-  ctx.fillRect(x, y, cached.width, cached.height);
+  ctx.fillRect(x, offsetY + row * s, footprintW * s, footprintH * s);
   ctx.restore();
+}
+
+/** Device-pixel y of the top of a selected item's visual sprite rect.
+ *  Bottom-anchored: the sprite bottom sits on the footprint's bottom edge. */
+function selectionTopY(
+  row: number,
+  h: number,
+  spriteH: number,
+  offsetY: number,
+  zoom: number,
+): number {
+  const s = TILE_SIZE * zoom;
+  return offsetY + (row + h) * s - Math.max(spriteH * zoom, h * s);
 }
 
 export function renderSelectionHighlight(
@@ -366,18 +383,20 @@ export function renderSelectionHighlight(
   row: number,
   w: number,
   h: number,
+  spriteH: number,
   offsetX: number,
   offsetY: number,
   zoom: number,
 ): void {
   const s = TILE_SIZE * zoom;
   const x = offsetX + col * s;
-  const y = offsetY + row * s;
+  const y = selectionTopY(row, h, spriteH, offsetY, zoom);
+  const hPx = offsetY + (row + h) * s - y;
   ctx.save();
   ctx.strokeStyle = SELECTION_HIGHLIGHT_COLOR;
   ctx.lineWidth = 2;
   ctx.setLineDash(SELECTION_DASH_PATTERN);
-  ctx.strokeRect(x + 1, y + 1, w * s - 2, h * s - 2);
+  ctx.strokeRect(x + 1, y + 1, w * s - 2, hPx - 2);
   ctx.restore();
 }
 
@@ -386,15 +405,16 @@ export function renderDeleteButton(
   col: number,
   row: number,
   w: number,
-  _h: number,
+  h: number,
+  spriteH: number,
   offsetX: number,
   offsetY: number,
   zoom: number,
 ): DeleteButtonBounds {
   const s = TILE_SIZE * zoom;
-  // Position at top-right corner of selected furniture
+  // Position at top-right corner of the selected furniture's visual sprite
   const cx = offsetX + (col + w) * s + 1;
-  const cy = offsetY + row * s - 1;
+  const cy = selectionTopY(row, h, spriteH, offsetY, zoom) - 1;
   const radius = Math.max(BUTTON_MIN_RADIUS, zoom * BUTTON_RADIUS_ZOOM_FACTOR);
 
   // Circle background
@@ -425,16 +445,17 @@ export function renderRotateButton(
   col: number,
   row: number,
   _w: number,
-  _h: number,
+  h: number,
+  spriteH: number,
   offsetX: number,
   offsetY: number,
   zoom: number,
 ): RotateButtonBounds {
   const s = TILE_SIZE * zoom;
-  // Position to the left of the delete button (which is at top-right corner)
+  // Position at top-left corner of the selected furniture's visual sprite
   const radius = Math.max(BUTTON_MIN_RADIUS, zoom * BUTTON_RADIUS_ZOOM_FACTOR);
   const cx = offsetX + col * s - 1;
-  const cy = offsetY + row * s - 1;
+  const cy = selectionTopY(row, h, spriteH, offsetY, zoom) - 1;
 
   // Circle background
   ctx.save();
@@ -522,11 +543,16 @@ export interface EditorRenderState {
   ghostSprite: SpriteData | null;
   ghostCol: number;
   ghostRow: number;
+  /** Footprint size of the ghost item (bottom-anchored sprite stands on it) */
+  ghostFootprintW: number;
+  ghostFootprintH: number;
   ghostValid: boolean;
   selectedCol: number;
   selectedRow: number;
   selectedW: number;
   selectedH: number;
+  /** Sprite height in sprite pixels of the selected item (for bottom-anchored overlays) */
+  selectedSpriteH: number;
   hasSelection: boolean;
   isRotatable: boolean;
   /** Updated each frame by renderDeleteButton */
@@ -728,6 +754,8 @@ export function renderFrame(
         editor.ghostSprite,
         editor.ghostCol,
         editor.ghostRow,
+        editor.ghostFootprintW,
+        editor.ghostFootprintH,
         editor.ghostValid,
         offsetX,
         offsetY,
@@ -741,6 +769,7 @@ export function renderFrame(
         editor.selectedRow,
         editor.selectedW,
         editor.selectedH,
+        editor.selectedSpriteH,
         offsetX,
         offsetY,
         zoom,
@@ -751,6 +780,7 @@ export function renderFrame(
         editor.selectedRow,
         editor.selectedW,
         editor.selectedH,
+        editor.selectedSpriteH,
         offsetX,
         offsetY,
         zoom,
@@ -762,6 +792,7 @@ export function renderFrame(
           editor.selectedRow,
           editor.selectedW,
           editor.selectedH,
+          editor.selectedSpriteH,
           offsetX,
           offsetY,
           zoom,

@@ -13,7 +13,11 @@ import {
 } from '../../constants.js';
 import { saveAgentSeats } from '../../hooks/useExtensionMessages.js';
 import { unlockAudio } from '../../notificationSound.js';
-import { canPlaceFurniture, getWallPlacementRow } from '../editor/editorActions.js';
+import {
+  canPlaceFurniture,
+  findFurnitureAt,
+  getWallPlacementRow,
+} from '../editor/editorActions.js';
 import type { EditorState } from '../editor/editorState.js';
 import type { CampusState } from '../engine/campusState.js';
 import { startGameLoop } from '../engine/gameLoop.js';
@@ -253,11 +257,14 @@ export function OfficeCanvas({
           ghostSprite: null,
           ghostCol: editorState.ghostCol,
           ghostRow: editorState.ghostRow,
+          ghostFootprintW: 1,
+          ghostFootprintH: 1,
           ghostValid: editorState.ghostValid,
           selectedCol: 0,
           selectedRow: 0,
           selectedW: 0,
           selectedH: 0,
+          selectedSpriteH: 0,
           hasSelection: false,
           isRotatable: false,
           deleteButtonBounds: null,
@@ -272,11 +279,15 @@ export function OfficeCanvas({
           const entry = getCatalogEntry(editorState.selectedFurnitureType);
           if (entry) {
             const placementRow = getWallPlacementRow(
+              officeState.getLayout(),
               editorState.selectedFurnitureType,
+              editorState.ghostCol,
               editorState.ghostRow,
             );
             editorRender.ghostSprite = entry.sprite;
             editorRender.ghostRow = placementRow;
+            editorRender.ghostFootprintW = entry.footprintW;
+            editorRender.ghostFootprintH = entry.footprintH;
             editorRender.ghostValid = canPlaceFurniture(
               officeState.getLayout(),
               editorState.selectedFurnitureType,
@@ -299,6 +310,8 @@ export function OfficeCanvas({
               editorRender.ghostSprite = entry.sprite;
               editorRender.ghostCol = ghostCol;
               editorRender.ghostRow = ghostRow;
+              editorRender.ghostFootprintW = entry.footprintW;
+              editorRender.ghostFootprintH = entry.footprintH;
               editorRender.ghostValid = canPlaceFurniture(
                 officeState.getLayout(),
                 draggedItem.type,
@@ -323,6 +336,7 @@ export function OfficeCanvas({
               editorRender.selectedRow = item.row;
               editorRender.selectedW = entry.footprintW;
               editorRender.selectedH = entry.footprintH;
+              editorRender.selectedSpriteH = entry.sprite.length;
               editorRender.isRotatable = isRotatable(item.type);
             }
           }
@@ -523,16 +537,7 @@ export function OfficeCanvas({
             } else if (editorState.activeTool === EditTool.FURNITURE_PICK && tile) {
               // Pick mode: show pointer over furniture, crosshair elsewhere
               const layout = officeState.getLayout();
-              const hitFurniture = layout.furniture.find((f) => {
-                const entry = getCatalogEntry(f.type);
-                if (!entry) return false;
-                return (
-                  tile.col >= f.col &&
-                  tile.col < f.col + entry.footprintW &&
-                  tile.row >= f.row &&
-                  tile.row < f.row + entry.footprintH
-                );
-              });
+              const hitFurniture = findFurnitureAt(layout.furniture, tile.col, tile.row);
               canvas.style.cursor = hitFurniture ? 'pointer' : 'crosshair';
             } else if (
               (editorState.activeTool === EditTool.SELECT ||
@@ -540,18 +545,9 @@ export function OfficeCanvas({
                   editorState.selectedFurnitureType === '')) &&
               tile
             ) {
-              // Check if hovering over furniture
+              // Check if hovering over furniture (including tall-sprite overhang)
               const layout = officeState.getLayout();
-              const hitFurniture = layout.furniture.find((f) => {
-                const entry = getCatalogEntry(f.type);
-                if (!entry) return false;
-                return (
-                  tile.col >= f.col &&
-                  tile.col < f.col + entry.footprintW &&
-                  tile.row >= f.row &&
-                  tile.row < f.row + entry.footprintH
-                );
-              });
+              const hitFurniture = findFurnitureAt(layout.furniture, tile.col, tile.row);
               canvas.style.cursor = hitFurniture ? 'grab' : 'crosshair';
             } else {
               canvas.style.cursor = 'crosshair';
@@ -668,20 +664,9 @@ export function OfficeCanvas({
           editorState.selectedFurnitureType === '');
       if (actAsSelect && tile) {
         const layout = officeState.getLayout();
-        // Find all furniture at clicked tile, prefer surface items (on top of desks)
-        let hitFurniture = null as (typeof layout.furniture)[0] | null;
-        for (const f of layout.furniture) {
-          const entry = getCatalogEntry(f.type);
-          if (!entry) continue;
-          if (
-            tile.col >= f.col &&
-            tile.col < f.col + entry.footprintW &&
-            tile.row >= f.row &&
-            tile.row < f.row + entry.footprintH
-          ) {
-            if (!hitFurniture || entry.canPlaceOnSurfaces) hitFurniture = f;
-          }
-        }
+        // Find furniture at clicked tile: footprint hits preferred (surface
+        // items win when stacked), visible sprite overhang as fallback
+        const hitFurniture = findFurnitureAt(layout.furniture, tile.col, tile.row);
         if (hitFurniture) {
           // Start drag — record offset from furniture's top-left
           editorState.startDrag(

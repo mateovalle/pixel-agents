@@ -7,7 +7,7 @@ import type {
   PlacedFurniture,
   TileType as TileTypeVal,
 } from '../types.js';
-import { MAX_COLS, MAX_ROWS, TileType } from '../types.js';
+import { MAX_COLS, MAX_ROWS, TILE_SIZE, TileType } from '../types.js';
 
 /** Paint a single tile with pattern and color. Returns new layout (immutable). */
 export function paintTile(
@@ -109,11 +109,74 @@ export function toggleFurnitureState(layout: OfficeLayout, uid: string): OfficeL
   };
 }
 
-/** For wall items, offset the row so the bottom row aligns with the hovered tile. */
-export function getWallPlacementRow(type: string, row: number): number {
+/** True if every tile of a footprint-wide span at (col..col+footprintW-1, row) is WALL. */
+function isAllWallRow(layout: OfficeLayout, col: number, footprintW: number, row: number): boolean {
+  if (row < 0 || row >= layout.rows) return false;
+  if (col < 0 || col + footprintW > layout.cols) return false;
+  for (let dc = 0; dc < footprintW; dc++) {
+    if (layout.tiles[row * layout.cols + col + dc] !== TileType.WALL) return false;
+  }
+  return true;
+}
+
+/** For wall items, compute the placement row for the hovered tile.
+ *  The footprint's bottom row aligns with the hovered tile when that tile is a
+ *  wall row. Wall sprites extend one tile above their tile (3D face), so
+ *  hovering the wall's upper visual half (the row directly above a wall row)
+ *  snaps placement down onto the wall row below. */
+export function getWallPlacementRow(
+  layout: OfficeLayout,
+  type: string,
+  col: number,
+  row: number,
+): number {
   const entry = getCatalogEntry(type);
   if (!entry?.canPlaceOnWalls) return row;
-  return row - (entry.footprintH - 1);
+  const base = row - (entry.footprintH - 1);
+  if (isAllWallRow(layout, col, entry.footprintW, row)) return base;
+  if (isAllWallRow(layout, col, entry.footprintW, row + 1)) return base + 1;
+  return base;
+}
+
+/** True if (col,row) is inside the item's visual tile rect: its footprint plus
+ *  any rows the bottom-anchored sprite overhangs above it (tall furniture). */
+export function isFurnitureVisualHit(item: PlacedFurniture, col: number, row: number): boolean {
+  const entry = getCatalogEntry(item.type);
+  if (!entry) return false;
+  if (col < item.col || col >= item.col + entry.footprintW) return false;
+  const bottom = item.row + entry.footprintH; // exclusive
+  const spriteRows = Math.ceil(entry.sprite.length / TILE_SIZE);
+  const top = bottom - Math.max(spriteRows, entry.footprintH);
+  return row >= top && row < bottom;
+}
+
+/** Find the furniture item at a tile for select/drag/pick. Footprint hits win
+ *  (surface items preferred when stacked on desks); otherwise fall back to
+ *  visual-overhang hits so clicking the visible upper part of a tall sprite
+ *  still selects it. */
+export function findFurnitureAt(
+  furniture: PlacedFurniture[],
+  col: number,
+  row: number,
+): PlacedFurniture | null {
+  let footprintHit: PlacedFurniture | null = null;
+  for (const f of furniture) {
+    const entry = getCatalogEntry(f.type);
+    if (!entry) continue;
+    if (
+      col >= f.col &&
+      col < f.col + entry.footprintW &&
+      row >= f.row &&
+      row < f.row + entry.footprintH
+    ) {
+      if (!footprintHit || entry.canPlaceOnSurfaces) footprintHit = f;
+    }
+  }
+  if (footprintHit) return footprintHit;
+  for (const f of furniture) {
+    if (isFurnitureVisualHit(f, col, row)) return f;
+  }
+  return null;
 }
 
 /** Check if furniture can be placed at (col, row) without overlapping. */

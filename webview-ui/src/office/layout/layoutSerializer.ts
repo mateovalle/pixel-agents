@@ -30,14 +30,24 @@ export function layoutToTileMap(layout: OfficeLayout): TileTypeVal[][] {
   return map;
 }
 
+/** World-space top y of a furniture sprite, bottom-anchored on its footprint.
+ *  The sprite's bottom edge aligns with the bottom of the footprint so tall
+ *  sprites (height > footprintH*TILE_SIZE) overhang upward and the blocked
+ *  tiles stay at the item's base. Legacy sprites (height == footprintH*TILE_SIZE)
+ *  get the same y as the old top-anchored formula. */
+export function furnitureSpriteY(row: number, footprintH: number, spriteH: number): number {
+  return (row + footprintH) * TILE_SIZE - spriteH;
+}
+
 /** Convert placed furniture into renderable FurnitureInstance[] */
 export function layoutToFurnitureInstances(furniture: PlacedFurniture[]): FurnitureInstance[] {
-  // Pre-compute desk zY per tile so surface items can sort in front of desks
+  // Pre-compute desk zY per tile so surface items can sort in front of desks.
+  // zY means the VISUAL sprite bottom, which is the footprint bottom edge.
   const deskZByTile = new Map<string, number>();
   for (const item of furniture) {
     const entry = getCatalogEntry(item.type);
     if (!entry || !entry.isDesk) continue;
-    const deskZY = item.row * TILE_SIZE + entry.sprite.length;
+    const deskZY = (item.row + entry.footprintH) * TILE_SIZE;
     for (let dr = 0; dr < entry.footprintH; dr++) {
       for (let dc = 0; dc < entry.footprintW; dc++) {
         const key = `${item.col + dc},${item.row + dr}`;
@@ -52,9 +62,9 @@ export function layoutToFurnitureInstances(furniture: PlacedFurniture[]): Furnit
     const entry = getCatalogEntry(item.type);
     if (!entry) continue;
     const x = item.col * TILE_SIZE;
-    const y = item.row * TILE_SIZE;
-    const spriteH = entry.sprite.length;
-    let zY = y + spriteH;
+    const y = furnitureSpriteY(item.row, entry.footprintH, entry.sprite.length);
+    // Visual sprite bottom == footprint bottom edge (bottom-anchored)
+    let zY = (item.row + entry.footprintH) * TILE_SIZE;
 
     // Chair z-sorting: ensure characters sitting on chairs render correctly
     if (entry.category === 'chairs') {

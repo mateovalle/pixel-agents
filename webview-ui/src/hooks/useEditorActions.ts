@@ -5,6 +5,7 @@ import type { ExpandDirection } from '../office/editor/editorActions.js';
 import {
   canPlaceFurniture,
   expandLayout,
+  findFurnitureAt,
   getWallPlacementRow,
   moveFurniture,
   paintTile,
@@ -15,11 +16,7 @@ import {
 } from '../office/editor/editorActions.js';
 import type { EditorState } from '../office/editor/editorState.js';
 import type { OfficeState } from '../office/engine/officeState.js';
-import {
-  getCatalogEntry,
-  getRotatedType,
-  getToggledType,
-} from '../office/layout/furnitureCatalog.js';
+import { getRotatedType, getToggledType } from '../office/layout/furnitureCatalog.js';
 import { defaultZoom } from '../office/toolUtils.js';
 import type {
   EditTool as EditToolType,
@@ -542,20 +539,11 @@ export function useEditorActions(
         const type = editorState.selectedFurnitureType;
         if (type === '') {
           // No item selected — act like SELECT (find furniture hit)
-          const hit = layout.furniture.find((f) => {
-            const entry = getCatalogEntry(f.type);
-            if (!entry) return false;
-            return (
-              col >= f.col &&
-              col < f.col + entry.footprintW &&
-              row >= f.row &&
-              row < f.row + entry.footprintH
-            );
-          });
+          const hit = findFurnitureAt(layout.furniture, col, row);
           editorState.selectedFurnitureUid = hit ? hit.uid : null;
           setEditorTick((n) => n + 1);
         } else {
-          const placementRow = getWallPlacementRow(type, row);
+          const placementRow = getWallPlacementRow(layout, type, col, row);
           if (!canPlaceFurniture(layout, type, col, placementRow)) return;
           const uid = `f-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
           const placed: PlacedFurniture = { uid, type, col, row: placementRow };
@@ -569,16 +557,7 @@ export function useEditorActions(
         }
       } else if (editorState.activeTool === EditTool.FURNITURE_PICK) {
         // Find furniture at clicked tile, copy its type and color for placement
-        const hit = layout.furniture.find((f) => {
-          const entry = getCatalogEntry(f.type);
-          if (!entry) return false;
-          return (
-            col >= f.col &&
-            col < f.col + entry.footprintW &&
-            row >= f.row &&
-            row < f.row + entry.footprintH
-          );
-        });
+        const hit = findFurnitureAt(layout.furniture, col, row);
         if (hit) {
           editorState.selectedFurnitureType = hit.type;
           editorState.pickedFurnitureColor = hit.color ? { ...hit.color } : null;
@@ -605,16 +584,7 @@ export function useEditorActions(
         }
         setEditorTick((n) => n + 1);
       } else if (editorState.activeTool === EditTool.SELECT) {
-        const hit = layout.furniture.find((f) => {
-          const entry = getCatalogEntry(f.type);
-          if (!entry) return false;
-          return (
-            col >= f.col &&
-            col < f.col + entry.footprintW &&
-            row >= f.row &&
-            row < f.row + entry.footprintH
-          );
-        });
+        const hit = findFurnitureAt(layout.furniture, col, row);
         editorState.selectedFurnitureUid = hit ? hit.uid : null;
         setEditorTick((n) => n + 1);
       }
