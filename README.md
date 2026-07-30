@@ -2,7 +2,7 @@
 
 **A pixel-art mission control for your Claude Code agents.** Every project is an office, every agent is a character you can watch work — and you orchestrate all of them from one campus.
 
-> 🎬 _[demo GIF goes here — campus → click an office → assign a task → a character spawns and works → the task checks itself off]_
+![Pixel Agents demo — campus with offices, agents working, task orchestration](docs/assets/demo.gif)
 
 ## What it does
 
