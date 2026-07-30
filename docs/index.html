@@ -382,12 +382,10 @@
     padding-bottom: 12px;
   }
   .avatar {
-    width: 16px;
-    height: 32px;
-    background: url('assets/char_3.png') -16px 0 no-repeat;
+    display: block;
+    width: 112px;
+    height: 128px;
     image-rendering: pixelated;
-    transform: scale(4);
-    transform-origin: bottom center;
   }
   .maker-body { flex: 1; min-width: 260px; }
   .maker-body h3 { font-family: var(--display); font-size: 13px; line-height: 1.7; margin-bottom: 16px; }
@@ -630,17 +628,13 @@
     <h2>ABOUT THE MAKER</h2>
 
     <div class="maker">
-      <div class="avatar-slot" aria-hidden="true"><div class="avatar"></div></div>
+      <div class="avatar-slot"><img class="avatar" src="assets/avatar.png" alt="Mateo — pixel avatar" width="28" height="32"></div>
       <div class="maker-body">
         <h3>MATEO VALLE</h3>
-        <!-- TODO(owner): replace this placeholder bio with your own short intro (2–3 sentences). -->
-        <p>Builder of Pixel Agents. [Short bio goes here — who you are, what you work on, and why you wanted your agents to have an office. Edit this paragraph in docs/index.html.]</p>
+        <p>Software engineer from Argentina building AI products, developer tools, and startups. I love turning complex problems into simple software and sharing the journey in public. Pixel Agents started as a simple question: if my agents work all day, shouldn't they at least have an office?</p>
         <div class="maker-links">
           <a class="chip" href="https://github.com/mateovalle">GITHUB</a>
-          <!-- TODO(owner): replace # with your X/Twitter profile URL -->
-          <a class="chip" href="#">X / TWITTER</a>
-          <!-- TODO(owner): replace # with mailto:your@email -->
-          <a class="chip" href="#">EMAIL</a>
+          <a class="chip" href="mailto:mateovalleduran@gmail.com">EMAIL</a>
         </div>
       </div>
     </div>
