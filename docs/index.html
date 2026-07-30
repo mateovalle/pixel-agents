@@ -59,6 +59,8 @@
   .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
 
   section { padding: 96px 0 0; }
+  /* class .wrap outranks the section element rule — restore section spacing */
+  section.wrap { padding: 96px 24px 0; }
 
   a { color: var(--green); }
   a:focus-visible, button:focus-visible {
@@ -449,7 +451,7 @@
   }
   @media (max-width: 560px) {
     .grid { grid-template-columns: 1fr; }
-    section { padding-top: 72px; }
+    section, section.wrap { padding-top: 72px; }
     .scene-viewport { height: 320px; }
     .scene { transform: translateX(-50%) scale(2) translateY(-16px); }
     .maker { padding: 24px; }
