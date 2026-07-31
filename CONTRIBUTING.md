@@ -31,4 +31,4 @@ All three targets must stay green; CI enforces them. Husky runs lint-staged on c
 
 ## Good starting points
 
-Check issues labeled `good first issue`. The broad roadmap: checkpoint/rewind buttons in chat, slash-command palette, `@`-file autocomplete, achievement-unlocked furniture, a free (CC0) office sprite pack to replace the private assets.
+Check issues labeled `good first issue`. The broad roadmap: checkpoint/rewind buttons in chat, slash-command palette, `@`-file autocomplete, achievement-unlocked furniture, code signing/notarization for the installers. New sprites are welcome too — see `scripts/asset-gen/` for the pipeline and style rules.

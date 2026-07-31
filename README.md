@@ -31,7 +31,21 @@ npm run dev        # Vite + Electron, hot reload
 
 `npm start` builds and runs the production bundle; `npm run package` creates installers (dmg/AppImage/nsis).
 
-> **Note on art assets:** some original sprite assets (floor patterns, furniture catalog) are privately licensed and not in this repo — offices render with basic tiles until a free asset pack lands ([issue #1](../../issues)). Characters and walls are included.
+> **Art assets:** all sprites in this repo (characters, furniture, floors, walls) are original work, MIT licensed like the code — most of them drawn by the agents themselves through a render-and-self-critique pipeline (`scripts/asset-gen/`).
+
+## Installing the packaged app
+
+Grab the installer for your platform from [Releases](../../releases/latest).
+
+**macOS:** the app is not code-signed yet (no Apple Developer subscription), so Gatekeeper will warn that it "cannot verify" the app. This is expected — to open it:
+
+1. Click **Done** (not "Move to Trash")
+2. Open **System Settings → Privacy & Security**, scroll down, and click **"Open Anyway"**
+3. Or from a terminal: `xattr -dr com.apple.quarantine "/Applications/Pixel Agents.app"`
+
+**Windows:** SmartScreen may show "Windows protected your PC" — click **More info → Run anyway**.
+
+You can always audit the code and build from source instead (below); signing/notarization is on the roadmap ([issues](../../issues)).
 
 ## Architecture (short version)
 
