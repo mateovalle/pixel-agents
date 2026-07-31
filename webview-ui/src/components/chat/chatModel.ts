@@ -1,5 +1,5 @@
 import type { ChatEvent } from '../../../../shared/protocol.js';
-import { CHAT_TOOL_SUMMARY_MAX_CHARS } from '../../constants.js';
+import { CHAT_SESSION_ENDED_TEXT, CHAT_TOOL_SUMMARY_MAX_CHARS } from '../../constants.js';
 
 /** Status of a single tool invocation shown as a card. */
 export type ToolCallStatus = 'running' | 'done' | 'error';
@@ -24,19 +24,21 @@ export type ChatItem =
     }
   | { kind: 'turn'; key: number; costUsd: number; durationMs: number; isError: boolean }
   | { kind: 'status'; key: number; text: string }
-  | { kind: 'error'; key: number; text: string };
+  | { kind: 'error'; key: number; text: string; hint?: string };
 
 export interface ChatModel {
   items: ChatItem[];
   nextKey: number;
+  /** True once the host session finished — the composer is disabled. */
+  ended: boolean;
 }
 
 export function emptyChatModel(): ChatModel {
-  return { items: [], nextKey: 1 };
+  return { items: [], nextKey: 1, ended: false };
 }
 
 function pushItem(model: ChatModel, make: (key: number) => ChatItem): ChatModel {
-  return { items: [...model.items, make(model.nextKey)], nextKey: model.nextKey + 1 };
+  return { ...model, items: [...model.items, make(model.nextKey)], nextKey: model.nextKey + 1 };
 }
 
 /** Index of the in-progress (streaming) assistant text block, or -1. */
@@ -164,7 +166,18 @@ export function applyChatEvent(model: ChatModel, event: ChatEvent): ChatModel {
       return pushItem(model, (key) => ({ kind: 'status', key, text: event.text }));
 
     case 'error':
-      return pushItem(model, (key) => ({ kind: 'error', key, text: event.message }));
+      return pushItem(model, (key) => ({
+        kind: 'error',
+        key,
+        text: event.message,
+        hint: event.hint,
+      }));
+
+    case 'session-ended':
+      return {
+        ...pushItem(model, (key) => ({ kind: 'status', key, text: CHAT_SESSION_ENDED_TEXT })),
+        ended: true,
+      };
 
     default:
       return model;

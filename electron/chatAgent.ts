@@ -16,6 +16,8 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk' with { 'resolution-mode': 'import' };
+import { execFileSync } from 'child_process';
+import * as fs from 'fs';
 import * as path from 'path';
 
 import type {
@@ -37,6 +39,68 @@ export interface TaskToolHandlers {
 const CHAT_HISTORY_MAX_EVENTS = 2000;
 const TOOL_SUMMARY_MAX_CHARS = 1500;
 const SUPPORTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+// Claude executable resolution (see resolveClaudeExecutable)
+const SDK_NATIVE_PACKAGE_PREFIX = '@anthropic-ai/claude-agent-sdk-';
+const ASAR_DIR_NAME = 'app.asar';
+const ASAR_UNPACKED_DIR_NAME = 'app.asar.unpacked';
+const STARTUP_ERROR_PREFIX = "Couldn't start Claude session: ";
+const STARTUP_ERROR_HINT =
+  'Is Claude Code installed and logged in? Setup guide: ' +
+  'https://github.com/mateovalle/pixel-agents#installing-the-packaged-app';
+
+/**
+ * Absolute path of the Claude Code binary the SDK should spawn.
+ *
+ * The SDK's own default resolves the platform binary package relative to
+ * sdk.mjs. Inside a packaged Electron app that path lands INSIDE app.asar:
+ * Electron's asar fs shim makes it pass the SDK's existsSync check, but
+ * child_process.spawn cannot execute from the virtual fs, so every session
+ * dies instantly with `spawn ENOTDIR`. Resolve the same package ourselves
+ * and redirect to the real on-disk copy in app.asar.unpacked (the binary is
+ * unpacked via the `asarUnpack` electron-builder config). Falls back to the
+ * user's own `claude` install (login-shell PATH is merged at startup), then
+ * to the SDK default (correct in dev, where nothing is inside an asar).
+ */
+let cachedClaudeExecutable: string | undefined;
+let claudeExecutableResolved = false;
+function resolveClaudeExecutable(): string | undefined {
+  if (claudeExecutableResolved) return cachedClaudeExecutable;
+  claudeExecutableResolved = true;
+
+  const exeSuffix = process.platform === 'win32' ? '.exe' : '';
+  const targets =
+    process.platform === 'linux'
+      ? [`linux-${process.arch}`, `linux-${process.arch}-musl`]
+      : [`${process.platform}-${process.arch}`];
+  for (const target of targets) {
+    try {
+      const resolved = require.resolve(`${SDK_NATIVE_PACKAGE_PREFIX}${target}/claude${exeSuffix}`);
+      const onDisk = resolved.replace(
+        `${path.sep}${ASAR_DIR_NAME}${path.sep}`,
+        `${path.sep}${ASAR_UNPACKED_DIR_NAME}${path.sep}`,
+      );
+      if (fs.existsSync(onDisk)) {
+        cachedClaudeExecutable = onDisk;
+        return onDisk;
+      }
+    } catch {
+      /* platform package not installed — try the next candidate */
+    }
+  }
+
+  try {
+    const lookup = process.platform === 'win32' ? 'where' : 'which';
+    const found = execFileSync(lookup, ['claude'], { encoding: 'utf-8' }).split(/\r?\n/)[0].trim();
+    if (found && fs.existsSync(found)) {
+      cachedClaudeExecutable = found;
+      return found;
+    }
+  } catch {
+    /* not on PATH — leave undefined so the SDK uses its own resolution */
+  }
+  return undefined;
+}
 
 type SdkModule = typeof import('@anthropic-ai/claude-agent-sdk', {
   with: { 'resolution-mode': 'import' },
@@ -96,6 +160,8 @@ export interface ChatSession {
   label: string;
   history: ChatEvent[];
   busy: boolean;
+  /** True once the SDK loop has finished — the session ignores input. */
+  ended: boolean;
   /** Last time the user sent a prompt — used for /clear attribution. */
   lastInputAt: number;
   mode: ChatPermissionMode;
@@ -134,6 +200,8 @@ export function startChatSession(opts: {
   const pendingPermissions = new Map<string, (r: PermissionResult) => void>();
   let query: Query | null = null;
   let disposed = false;
+  /** True once the SDK reported `system init` — the CLI process launched. */
+  let initialized = false;
 
   const session: ChatSession = {
     agentId,
@@ -142,6 +210,7 @@ export function startChatSession(opts: {
     label: opts.label,
     history: [],
     busy: false,
+    ended: false,
     lastInputAt: Date.now(),
     mode: 'default',
     latestTodos: [],
@@ -213,6 +282,7 @@ export function startChatSession(opts: {
     dispose(): void {
       if (disposed) return;
       disposed = true;
+      session.ended = true;
       // Deny anything still waiting so the SDK isn't parked forever
       for (const [requestId, resolve] of pendingPermissions) {
         send({ type: 'chat-permission-resolved', agentId, requestId });
@@ -319,12 +389,17 @@ export function startChatSession(opts: {
     } else if (msg.type === 'system' && msg.subtype === 'compact_boundary') {
       emit({ kind: 'status', text: 'Context compacted' });
     } else if (msg.type === 'system' && msg.subtype === 'init') {
+      initialized = true;
       send({ type: 'chat-mode', agentId, mode: session.mode });
     }
   }
 
+  const claudeExecutable = resolveClaudeExecutable();
   const sdkOptions: Options = {
     cwd,
+    // Explicit path so packaged builds spawn the real unpacked binary
+    // instead of the SDK's asar-internal default (see resolveClaudeExecutable)
+    ...(claudeExecutable ? { pathToClaudeCodeExecutable: claudeExecutable } : {}),
     // Resuming continues the same session id (no fork), so the transcript
     // watcher registered on this id keeps working in both cases.
     ...(opts.resume ? { resume: sessionId } : { sessionId }),
@@ -433,12 +508,19 @@ export function startChatSession(opts: {
     } catch (err) {
       if (!disposed) {
         console.error(`[Pixel Agents] Chat ${agentId} session error:`, err);
-        emit({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
+        const message = err instanceof Error ? err.message : String(err);
+        // Before `system init` the CLI never launched — surface guidance,
+        // not just the raw spawn error.
+        emit(
+          initialized
+            ? { kind: 'error', message }
+            : { kind: 'error', message: STARTUP_ERROR_PREFIX + message, hint: STARTUP_ERROR_HINT },
+        );
       }
     } finally {
       setBusy(false);
       if (!disposed) {
-        emit({ kind: 'status', text: 'Session ended' });
+        emit({ kind: 'session-ended' });
         opts.onExit();
       }
     }

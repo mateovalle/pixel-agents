@@ -356,8 +356,11 @@ function launchChatAgent(cwd: string, resumeSessionId?: string, initialPrompt?: 
     },
     onExit: () => {
       // The SDK loop ended on its own (error or shutdown) — retire the
-      // character but leave the tab so any error output stays readable.
-      chatSessions.delete(agent.id);
+      // character but keep the (now inert) session registered so the tab's
+      // 'chatReady' still gets a history replay: startup failures usually
+      // land before the ChatView has mounted, and without the replay the
+      // tab would stay blank and deaf. closeAgent removes it for real.
+      chatSessions.get(agent.id)?.dispose();
       if (ctx.agents.has(agent.id)) {
         removeAgent(agent.id);
         ctx.send({ type: 'agentClosed', id: agent.id });
@@ -596,7 +599,7 @@ function openAssistant(): void {
               {},
               async () => {
                 const data = [...chatSessions.values()]
-                  .filter((cs) => cs.agentId !== assistantAgentId)
+                  .filter((cs) => cs.agentId !== assistantAgentId && !cs.ended)
                   .map((cs) => ({
                     agentId: cs.agentId,
                     workspace: cs.cwd,
@@ -664,7 +667,8 @@ function openAssistant(): void {
       recordTurnUsage(os.homedir(), costUsd, durationMs);
     },
     onExit: () => {
-      chatSessions.delete(id);
+      // Same as launchChatAgent: keep the inert session for tab replay
+      chatSessions.get(id)?.dispose();
       if (assistantAgentId === id) assistantAgentId = null;
     },
   });
@@ -1087,6 +1091,9 @@ function createWindow(): void {
     const devServer = process.env.VITE_DEV_SERVER_URL;
     if (!(devServer && url.startsWith(devServer)) && !url.startsWith('file://')) {
       event.preventDefault();
+      // In-app links (e.g. the setup hint in chat error cards) open in the
+      // system browser instead of navigating the window.
+      if (url.startsWith('https://')) void shell.openExternal(url);
     }
   });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));

@@ -6,8 +6,10 @@ import {
   CHAT_ATTACH_THUMB_PX,
   CHAT_ATTACH_WARNING_MS,
   CHAT_BODY_FONT_SIZE_PX,
+  CHAT_COMPOSER_ENDED_PLACEHOLDER,
   CHAT_COMPOSER_LINE_HEIGHT_PX,
   CHAT_COMPOSER_MAX_ROWS,
+  CHAT_COMPOSER_PLACEHOLDER,
   CHAT_COST_DECIMALS,
   CHAT_DROP_OVERLAY_BG,
   CHAT_DROP_OVERLAY_INSET_PX,
@@ -124,12 +126,48 @@ const statusLineStyle: React.CSSProperties = {
   fontStyle: 'italic',
 };
 
-const errorLineStyle: React.CSSProperties = {
+const errorCardStyle: React.CSSProperties = {
   fontSize: CHAT_BODY_FONT_SIZE_PX,
   color: 'var(--pixel-chat-red)',
+  background: 'var(--pixel-chat-card-bg)',
+  border: '2px solid var(--pixel-chat-red)',
+  borderRadius: 0,
+  boxShadow: 'var(--pixel-shadow)',
+  padding: '6px 10px',
   whiteSpace: 'pre-wrap',
   wordBreak: 'break-word',
 };
+
+const errorHintStyle: React.CSSProperties = {
+  marginTop: 6,
+  color: 'var(--pixel-text)',
+  fontSize: CHAT_BODY_FONT_SIZE_PX - 1,
+};
+
+const errorLinkStyle: React.CSSProperties = {
+  color: 'var(--pixel-accent)',
+  wordBreak: 'break-all',
+};
+
+/** Alternates text/URL thanks to the capturing group in split(). */
+const URL_SPLIT_PATTERN = /(https?:\/\/[^\s]+)/;
+
+/** Plain text with http(s) URLs rendered as links (opened externally). */
+function TextWithLinks({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(URL_SPLIT_PATTERN).map((part, i) =>
+        i % 2 === 1 ? (
+          <a key={i} href={part} style={errorLinkStyle}>
+            {part}
+          </a>
+        ) : (
+          <span key={i}>{part}</span>
+        ),
+      )}
+    </>
+  );
+}
 
 const newMessagesBtnStyle: React.CSSProperties = {
   position: 'absolute',
@@ -467,8 +505,13 @@ function ChatItemView({ item }: { item: ChatItem }) {
       );
     case 'error':
       return (
-        <div className="pixel-chat-body" style={errorLineStyle}>
-          {item.text}
+        <div className="pixel-chat-body" style={errorCardStyle}>
+          <div>{item.text}</div>
+          {item.hint && (
+            <div style={errorHintStyle}>
+              <TextWithLinks text={item.hint} />
+            </div>
+          )}
         </div>
       );
     default:
@@ -759,7 +802,8 @@ export function ChatView({ agentId, visible }: ChatViewProps) {
     [agentId],
   );
 
-  const sendDisabled = draft.trim() === '' && attachments.length === 0;
+  const ended = model.ended;
+  const sendDisabled = ended || (draft.trim() === '' && attachments.length === 0);
 
   return (
     <div
@@ -852,10 +896,11 @@ export function ChatView({ agentId, visible }: ChatViewProps) {
               handleSend();
             }
           }}
-          placeholder="Message Claude… (Enter to send, Shift+Enter for newline)"
+          placeholder={ended ? CHAT_COMPOSER_ENDED_PLACEHOLDER : CHAT_COMPOSER_PLACEHOLDER}
+          disabled={ended}
           style={textareaStyle}
         />
-        {busy ? (
+        {busy && !ended ? (
           <button style={stopBtnStyle} onClick={handleStop} title="Interrupt the current turn">
             Stop
           </button>

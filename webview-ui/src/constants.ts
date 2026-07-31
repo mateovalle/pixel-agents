@@ -123,6 +123,10 @@ export const CHAT_ATTACH_WARNING_MS = 4000;
 export const CHAT_ATTACH_THUMB_PX = 48;
 export const CHAT_DROP_OVERLAY_INSET_PX = 8;
 export const CHAT_DROP_OVERLAY_BG = 'rgba(20, 20, 31, 0.8)';
+export const CHAT_SESSION_ENDED_TEXT = 'Session ended';
+export const CHAT_COMPOSER_PLACEHOLDER = 'Message Claude… (Enter to send, Shift+Enter for newline)';
+export const CHAT_COMPOSER_ENDED_PLACEHOLDER =
+  'Session ended — close this tab or start a new agent';
 export const SECONDS_PER_MINUTE = 60;
 export const MINUTES_PER_HOUR = 60;
 export const HOURS_PER_DAY = 24;

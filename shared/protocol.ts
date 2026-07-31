@@ -70,7 +70,10 @@ export type ChatEvent =
   | { kind: 'turn-complete'; costUsd: number; durationMs: number; isError: boolean }
   /** Informational status line (compaction, retries, …). */
   | { kind: 'status'; text: string }
-  | { kind: 'error'; message: string };
+  /** Fatal session error; `hint` carries user guidance for startup failures. */
+  | { kind: 'error'; message: string; hint?: string }
+  /** The SDK loop finished — the session accepts no further input. */
+  | { kind: 'session-ended' };
 
 /** A registered workspace (project folder) — rendered as an office. */
 export interface WorkspaceInfo {

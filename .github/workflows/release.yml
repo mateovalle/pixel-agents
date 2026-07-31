@@ -37,6 +37,8 @@ jobs:
       - name: Install webview dependencies
         run: npm ci
         working-directory: webview-ui
+      - name: Verify tag matches package.json version
+        run: node -e "const v=require('./package.json').version, t=process.env.GITHUB_REF_NAME.replace(/^v/,''); if(v!==t){console.error('package.json '+v+' != tag '+t); process.exit(1)}"
       - name: Build app
         run: npm run build:electron && npm run build:webview
       - name: Package
